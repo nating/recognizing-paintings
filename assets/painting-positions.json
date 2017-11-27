@@ -1,0 +1,79 @@
+{
+	"galleries":[
+		{
+			"name":"Gallery1.jpg",
+			"paintings":[
+				{
+					"name":"Painting2.jpg",
+					"title":"The Arrival of the Kattendijk at Texel",
+					"points":[[212, 261],[445, 225],[428,725],[198,673]]
+				},
+				{
+					"name":"Painting1.jpg",
+					"title":"Wedding Feast at Cana",
+					"points":[[686, 377],[1050, 361],[1048,705],[686,652]]
+				}
+			]
+		},
+		{
+			"name":"Gallery2.jpg",
+			"paintings":[
+				{
+					"name":"Painting3.jpg",
+					"title":"Joseph selling corn in Egypt",
+					"points":[[252,279],[691,336],[695,662],[258,758]]
+				},
+				{
+					"name":"Painting2.jpg",
+					"title":"The Arrival of the Kattendijk at Texel",
+					"points":[[897,173],[1063,234],[1079,672],[917,739]]
+				},
+				{
+					"name":"Painting1.jpg",
+					"title":"Wedding Feast at Cana",
+					"points":[[1174,388],[1221,395],[1216,544],[1168,555]]
+				}
+			]
+		},
+		{
+			"name":"Gallery3.jpg",
+			"paintings":[
+				{
+					"name":"Painting4.jpg",
+					"title":"A Thunderstorm: The Frightened Wagoner",
+					"points":[[68,329],[350,337],[351,545],[75,558]]
+				},
+				{
+					"name":"Painting5.jpg",
+					"title":"A Sick Call",
+					"points":[[629,346],[877,350],[873,517],[627,530]]
+				},
+				{
+					"name":"Painting6.jpg",
+					"title":"A View of the Rye Water near Leixlip",
+					"points":[[1057,370],[1187,374],[1182,487],[1053,493]]
+				}
+			]
+		},
+		{
+			"name":"Gallery4.jpg",
+			"paintings":[
+				{
+					"name":"Painting4.jpg",
+					"title":"A Thunderstorm: The Frightened Wagoner",
+					"points":[[176,348],[298,347],[307,481],[184,475]]
+				},
+				{
+					"name":"Painting5.jpg",
+					"title":"A Sick Call",
+					"points":[[469,343],[690,338],[692,495],[472,487]]
+				},
+				{
+					"name":"Painting6.jpg",
+					"title":"A View of the Rye Water near Leixlip",
+					"points":[[924,349],[1161,344],[1156,495],[924,488]]
+				}
+			]
+		}
+	]
+}
