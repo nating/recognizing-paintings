@@ -13,6 +13,8 @@
 #include <opencv2/opencv.hpp>
 #include "json.hpp" //https://github.com/nlohmann/json
 #include <fstream>
+#include "vision-techniques.h"
+#include "extra-functions.h"
 
 using json = nlohmann::json;
 using namespace cv;
@@ -83,7 +85,6 @@ vector<Gallery> read_gallery_ground_truths(string path_to_ground_truths_json){
             p.name = p_name;
             vector<Point> points;
             for (json::iterator t = z.value()["points"].begin(); t != z.value()["points"].end(); ++t) {
-                cout << t.value() << endl;
                 points.push_back(Point(t.value()[0],t.value()[1]));
             }
             p.points = points;
@@ -95,15 +96,34 @@ vector<Gallery> read_gallery_ground_truths(string path_to_ground_truths_json){
     return galleries;
 }
 
+void getHoles(Mat img,string path_to_output){
+    
+    /*
+     //Perform mean shift segmentation on the image
+     int spatial_radius = 80;
+     int color_radius = 55;
+     int maximum_pyramid_level = 0;
+     Mat meanS = meanShiftSegmentation(img, spatial_radius, color_radius, maximum_pyramid_level);
+     */
+    
+    Mat meanS = floodFill(img,10);
+    
+    vector<Mat> color = {meanS};
+    display_images("Color",color);
+    waitKey(0);
+    
+}
+
 //------------------------------------------------ MAIN PROGRAM --------------------------------------------------------
 
 int main(int argc, char** argv){
     
     //Define filepaths
-    string path_to_gallery_images = "/Users/GeoffreyNatin/Documents/GithubRepositories/visionwork/assignment-2/assets/galleries/";
-    string path_to_painting_images = "/Users/GeoffreyNatin/Documents/GithubRepositories/visionwork/assignment-2/assets/paintings/";
-    string path_to_output_images = "/Users/GeoffreyNatin/Documents/GithubRepositories/visionwork/assignment-2/assets/output_images/";
-    string path_to_gallery_ground_truths_json = "/Users/GeoffreyNatin/Documents/GithubRepositories/visionwork/assignment-2/assets/painting-positions.json";
+    string path_to_gallery_images = "/Users/GeoffreyNatin/Documents/GithubRepositories/recognizing-paintings/assets/galleries/";
+    string path_to_gallery_means = "/Users/GeoffreyNatin/Documents/GithubRepositories/recognizing-paintings/assets/mean-shifts/";
+    string path_to_painting_images = "/Users/GeoffreyNatin/Documents/GithubRepositories/recognizing-paintings/assets/paintings/";
+    string path_to_output_images = "/Users/GeoffreyNatin/Documents/GithubRepositories/recognizing-paintings/assets/output_images/";
+    string path_to_gallery_ground_truths_json = "/Users/GeoffreyNatin/Documents/GithubRepositories/recognizing-paintings/assets/painting-positions.json";
     
     //Initialise variables
     const int number_of_gallery_images = 4;
@@ -115,19 +135,14 @@ int main(int argc, char** argv){
     //Read in ground truths
     vector<Gallery> gallery_ground_truths = read_gallery_ground_truths(path_to_gallery_ground_truths_json);
     
-    //Create vector of paintings that the program can recognise
-    for(int i=0;i<number_of_painting_images;i++){
-        string painting_image_name = "Painting"+to_string(i+1)+".jpg";
-        painting_images[i] = imread(path_to_painting_images+painting_image_name);
-    }
-    
     //Process each gallery image
     for(int i=0;i<number_of_gallery_images;i++){
         //Read in the image
         string gallery_image_name = "Gallery"+to_string(i+1)+".jpg";
-        gallery_images[i] = imread(path_to_gallery_images+gallery_image_name);
+        gallery_images[i] = imread(path_to_gallery_means+gallery_image_name);
         if(gallery_images[i].empty()){ cout << "Image "+to_string(i)+" empty. Ending program." << endl; return -1; }
         
+        getHoles(gallery_images[i],path_to_gallery_means+gallery_image_name);
         //Locate paintings
         
         //Recognise paintings
