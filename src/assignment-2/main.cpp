@@ -96,22 +96,37 @@ vector<Gallery> read_gallery_ground_truths(string path_to_ground_truths_json){
     return galleries;
 }
 
-void getHoles(Mat img,string path_to_output){
+void getHoles(Mat img,string path_to_output_folder,string image_name){
     
+    for(int i=0;i<7;i++){
+        //Perform mean shift segmentation on the image
+        int spatial_radius = 80;
+        int color_radius = 50+(i*5);
+        int maximum_pyramid_level = 0;
+        Mat meanS = meanShiftSegmentation(img, spatial_radius, color_radius, maximum_pyramid_level);
+        imwrite(path_to_output_folder+"sr_80_color_radius_"+to_string(color_radius)+"/"+image_name,meanS);
+    }
     /*
-     //Perform mean shift segmentation on the image
-     int spatial_radius = 80;
-     int color_radius = 55;
-     int maximum_pyramid_level = 0;
-     Mat meanS = meanShiftSegmentation(img, spatial_radius, color_radius, maximum_pyramid_level);
-     */
+    Mat floodImage = floodFill(img,2);
     
-    Mat meanS = floodFill(img,10);
+    Mat grayscaleMat = grayscale(floodImage);
     
-    vector<Mat> color = {meanS};
+    //Convert the grayscale image into a binary image
+    int block_size = 15;
+    int offset = 7;
+    int output_value = 255;
+    Mat binaryMat = adaptiveBinary(grayscaleMat,block_size,offset,output_value);
+    
+    int close_level = 0;
+    int open_level = 10;
+    Mat closed = close(binaryMat, close_level);
+    Mat opened = open(closed, open_level);
+    
+    
+    vector<Mat> color = {floodImage};
     display_images("Color",color);
     waitKey(0);
-    
+    */
 }
 
 //------------------------------------------------ MAIN PROGRAM --------------------------------------------------------
@@ -139,10 +154,10 @@ int main(int argc, char** argv){
     for(int i=0;i<number_of_gallery_images;i++){
         //Read in the image
         string gallery_image_name = "Gallery"+to_string(i+1)+".jpg";
-        gallery_images[i] = imread(path_to_gallery_means+gallery_image_name);
+        gallery_images[i] = imread(path_to_gallery_images+gallery_image_name);
         if(gallery_images[i].empty()){ cout << "Image "+to_string(i)+" empty. Ending program." << endl; return -1; }
         
-        getHoles(gallery_images[i],path_to_gallery_means+gallery_image_name);
+        getHoles(gallery_images[i],path_to_gallery_means,gallery_image_name);
         //Locate paintings
         
         //Recognise paintings
