@@ -74,6 +74,24 @@ Mat floodFill( Mat img, int color_difference){
     return flooded;
 }
 
+//This function takes an image and the accepted color difference for pixels to be in the same region, returning a flood filled copy of the image
+Mat floodFillRandom( Mat img, int color_difference){
+    CV_Assert( !img.empty() );
+    Mat flooded = img.clone();
+    Mat mask( img.rows+2, img.cols+2, CV_8UC1, Scalar::all(0) ); //The floodFill function requires that the rows and columns are this length
+    RNG rng = theRNG();
+    for(int y=0;y<flooded.rows;y++){
+        for(int x=0;x<flooded.cols;x++){
+            if(mask.at<uchar>(y+1, x+1)==0){
+                Point point(x,y);
+                Scalar pointColour(rng(256),rng(256),rng(256)); //The first point of each segment is used as the color for the flood fill
+                floodFill( flooded, mask, Point(x,y), pointColour, 0, Scalar::all(color_difference), Scalar::all(color_difference),4);
+            }
+        }
+    }
+    return flooded;
+}
+
 //This function takes an image and mean-shift parameters and returns a version of the image that has had mean shift segmentation performed on it
 Mat meanShiftSegmentation(Mat img, int spatial_radius, int color_radius, int maximum_pyramid_level){
     Mat res = img.clone();
