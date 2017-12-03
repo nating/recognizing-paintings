@@ -96,37 +96,196 @@ vector<Gallery> read_gallery_ground_truths(string path_to_ground_truths_json){
     return galleries;
 }
 
+//Returns a version of the image where the wall is white and the rest of the image is black.
+Mat getWallMask(Mat& img,Scalar color_difference){
+    CV_Assert( !img.empty() );
+    RNG rng = theRNG();
+    Mat cl = img.clone();
+    Mat mask( img.rows+2, img.cols+2, CV_8UC1, Scalar::all(0) );
+    Scalar wallColor;
+    int largest_segment = 0;
+    for( int y = 0; y < img.rows; y++ ){
+        for( int x = 0; x < img.cols; x++ ){
+            if( mask.at<uchar>(y+1, x+1) == 0 ){
+                Scalar newVal( rng(256), rng(256), rng(256) );
+                Rect rect;
+                floodFill( img, mask, Point(x,y), newVal, &rect, color_difference,color_difference,4);
+                int segment_size = rect.width*rect.height;
+                if(segment_size>largest_segment){
+                    largest_segment = segment_size;
+                    wallColor = newVal;
+                }
+            }
+        }
+    }
+    
+    Mat wall_mask = cl.clone();
+    inRange(img, wallColor, wallColor, wall_mask);
+    return wall_mask;
+}
+
+vector<Rect> getRectsAroundContours(vector<vector<Point>> contours, vector<Vec4i> hierarchy){
+    
+    vector<Rect> rects;
+    
+    if ( !contours.empty() && !hierarchy.empty() ) {
+        for ( int i=0; i<contours.size(); i++ ) {
+            Rect bounder = boundingRect(contours[i]);
+            rects.push_back(bounder);
+        }
+    }
+    return rects;
+}
+
+Mat dilate(Mat img,int se_size,int shape=MORPH_RECT){
+    Mat res;
+    dilate(img,res,getStructuringElement(shape, Size(se_size,se_size)));
+    return res;
+}
+
+Mat invert(Mat img){
+    Mat res;
+    bitwise_not(img, res);
+    return res;
+}
+
+Mat medianFilter(Mat img, int blur_size){
+    Mat res;
+    medianBlur(img, res, blur_size);
+    return res;
+}
+
+vector<Rect> getPaintingLocations(Mat img, vector<Rect> sub_images){
+    
+    vector<Rect> painting_locations;
+    
+    for(int i=0;i<sub_images.size();i++){
+        
+        //Following something along the lines of this right now... http://artsy.github.io/blog/2014/09/24/using-pattern-recognition-to-automatically-crop-framed-art/
+        
+        cout << "1" << endl;
+        //Create sub image to work with
+        Mat sub_image = Mat(img,sub_images[i]);
+        cout << "2" << endl;
+        
+        //Convert sub image to grayscale
+        Mat gray = grayscale(sub_image);
+        
+        //Dilate the grayscale image to get rid of the less important edges
+        int structuring_element_size = 3; //TODO: test this value for the best results
+        Mat dil = dilate(gray,structuring_element_size);
+        
+        //Perform median filter to preserve edges and remove noise (https://en.wikipedia.org/wiki/Median_filter)
+        int blur_size = 7; //TODO: Test this value for the best results
+        Mat med = medianFilter(dil, blur_size);
+        
+        //The blog post does some 'shrinking and enlarging' here?
+        
+        //Perform canny edges to get the edges in the image
+        //Apparently a good way of finding the threshold for canny edges: https://stackoverflow.com/questions/4292249/automatic-calculation-of-low-and-high-thresholds-for-the-canny-operation-in-open
+        Mat rubbish;
+        double otsu_thresh_val = cv::threshold(med, rubbish, 0, 255, CV_THRESH_BINARY | CV_THRESH_OTSU);
+        double high_thresh_val  = otsu_thresh_val, lower_thresh_val = otsu_thresh_val * 0.5;
+        int low_threshold = 100;
+        int high_threshold = 300;
+        Mat edges;
+        //Canny(med, edges, low_threshold, high_threshold);
+        Canny(med, edges, lower_thresh_val, high_thresh_val);
+        
+        //Dilate the edges
+        Mat dil2 = dilate(edges,structuring_element_size);
+        
+        vector<Mat> color = {dil2};
+        display_images("Color",color);
+        waitKey(0);
+        
+        //Mat can = Scalar::all(0);
+        //img.copyTo(can,edges);
+        
+    }
+    
+    return sub_images;
+}
+
+string getPaintingMatch(Mat img, Rect painting_location){
+    
+    return "";
+}
+
 void getHoles(Mat img,string path_to_output_folder,string image_name){
     
-    for(int i=0;i<7;i++){
-        //Perform mean shift segmentation on the image
-        int spatial_radius = 80;
-        int color_radius = 50+(i*5);
-        int maximum_pyramid_level = 0;
-        Mat meanS = meanShiftSegmentation(img, spatial_radius, color_radius, maximum_pyramid_level);
-        imwrite(path_to_output_folder+"sr_80_color_radius_"+to_string(color_radius)+"/"+image_name,meanS);
+    //Perform mean shift segmentation on the image
+    int spatial_radius = 7;
+    int color_radius = 13;
+    int maximum_pyramid_level = 1;
+    Mat meanS = meanShiftSegmentation(img, spatial_radius, color_radius, maximum_pyramid_level);
+    
+    //Get a mask of just the wallc
+    Mat wall_mask = getWallMask(meanS,Scalar::all(2));
+    
+    //Dilate the wall mask to remove noise
+    int structuring_element_size = 10;
+    Mat dilated_wall_mask = dilate(wall_mask,structuring_element_size);
+    
+    //Invert the wall mask
+    Mat inverted_wall_mask = invert(dilated_wall_mask);
+    
+    //Perform connected components on the inverted wall mask to find the non-wall components
+    vector<vector<Point>> contours;
+    vector<Vec4i> hierarchy;
+    findContours(inverted_wall_mask,contours,hierarchy,CV_RETR_TREE, CV_CHAIN_APPROX_NONE);
+    
+    //Get the locations of the sub images to check for paintings
+    vector<Rect> sub_images = getRectsAroundContours(contours,hierarchy);
+    
+    //Get location of painting in each sub image
+    vector<Rect> painting_locations = getPaintingLocations(img,sub_images);
+    
+    //Check if any potential painting locations contain a painting from our database
+    for(int i=0;i<painting_locations.size();i++){
+        if(getPaintingMatch(img,painting_locations[i])!=""){
+            //Also put the name of the painting on the image here
+            rectangle(img, painting_locations[i].tl(), painting_locations[i].br(), Scalar(255,255,255),3);
+        }
     }
-    /*
-    Mat floodImage = floodFill(img,2);
-    
-    Mat grayscaleMat = grayscale(floodImage);
-    
-    //Convert the grayscale image into a binary image
-    int block_size = 15;
-    int offset = 7;
-    int output_value = 255;
-    Mat binaryMat = adaptiveBinary(grayscaleMat,block_size,offset,output_value);
-    
-    int close_level = 0;
-    int open_level = 10;
-    Mat closed = close(binaryMat, close_level);
-    Mat opened = open(closed, open_level);
     
     
-    vector<Mat> color = {floodImage};
+    for(int i=0;i<sub_images.size();i++){
+        rectangle(img, sub_images[i].tl(), sub_images[i].br(), Scalar(255,255,255),3);
+    }
+    
+    vector<Mat> color = {img};
     display_images("Color",color);
     waitKey(0);
-    */
+}
+
+Mat createWallMask(Mat img){
+    
+    Mat e = img.clone();
+    
+    //Do mean shift segmentation and get the color of each segment
+    //meanShi
+    Mat meanS = img.clone();
+
+    //Find the color of the biggest segment
+    
+    //Create a mask where all pixels within a certain euclidean distance from the wall color are black
+    
+    //You know have a binary image (the mask)
+    
+    //Change all black segments that are below a certain size to white (they are not the wall)
+    
+    //Now you have an image where the black is the things that are not the wall
+    
+    //Do connected components analysis and find the holes that are inside the wall. These are the potential paintings.
+    
+    //Create mask to find average pixel value in original image
+    Mat labels = cv::Mat::zeros(img.size(), CV_8UC1); //This creates a fully black image of the same size as the original image
+    //drawContours(labels, contours, i, Scalar(255),CV_FILLED); //This draws white on the pixels in the contour on the mask.
+    //Scalar average_color = mean(img, labels); // This gets the average color of the pixels in the img where the mask is white.
+    
+    return e;
+    
 }
 
 //------------------------------------------------ MAIN PROGRAM --------------------------------------------------------
@@ -135,7 +294,7 @@ int main(int argc, char** argv){
     
     //Define filepaths
     string path_to_gallery_images = "/Users/GeoffreyNatin/Documents/GithubRepositories/recognizing-paintings/assets/galleries/";
-    string path_to_gallery_means = "/Users/GeoffreyNatin/Documents/GithubRepositories/recognizing-paintings/assets/mean-shifts/";
+    string path_to_gallery_means = "/Users/GeoffreyNatin/Documents/GithubRepositories/recognizing-paintings/assets/mean-shifts/sr_80_color_radius_65/";
     string path_to_painting_images = "/Users/GeoffreyNatin/Documents/GithubRepositories/recognizing-paintings/assets/paintings/";
     string path_to_output_images = "/Users/GeoffreyNatin/Documents/GithubRepositories/recognizing-paintings/assets/output_images/";
     string path_to_gallery_ground_truths_json = "/Users/GeoffreyNatin/Documents/GithubRepositories/recognizing-paintings/assets/painting-positions.json";
