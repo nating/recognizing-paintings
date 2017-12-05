@@ -109,7 +109,7 @@ Mat getWallMask(Mat& img,Scalar color_difference){
             if( mask.at<uchar>(y+1, x+1) == 0 ){
                 Scalar newVal( rng(256), rng(256), rng(256) );
                 Rect rect;
-                floodFill( img, mask, Point(x,y), newVal, &rect, color_difference,color_difference,4);
+                floodFill( cl, mask, Point(x,y), newVal, &rect, color_difference,color_difference,4);
                 int segment_size = rect.width*rect.height;
                 if(segment_size>largest_segment){
                     largest_segment = segment_size;
@@ -119,19 +119,30 @@ Mat getWallMask(Mat& img,Scalar color_difference){
         }
     }
     
-    Mat wall_mask = cl.clone();
-    inRange(img, wallColor, wallColor, wall_mask);
+    Mat wall_mask = img.clone();
+    inRange(cl, wallColor, wallColor, wall_mask);
     return wall_mask;
 }
 
-vector<Rect> getRectsAroundContours(vector<vector<Point>> contours, vector<Vec4i> hierarchy){
+vector<Rect> getRectsAroundContours(Mat img,vector<vector<Point>> contours, vector<Vec4i> hierarchy){
     
     vector<Rect> rects;
     
     if ( !contours.empty() && !hierarchy.empty() ) {
         for ( int i=0; i<contours.size(); i++ ) {
             Rect bounder = boundingRect(contours[i]);
-            rects.push_back(bounder);
+            
+            //TODO: Maybe replace these conditions again when you have things working
+            
+            //Check that the rect is smaller than the entire image and bigger than a certain size
+            if(bounder.width*bounder.height<img.rows*img.cols && bounder.width*bounder.height>150*150){
+                
+                //Extra to remove floors when programming
+                if(contourArea(contours[i])>bounder.width*bounder.height*.6){
+                    rects.push_back(bounder);
+                }
+            }
+            
         }
     }
     return rects;
@@ -155,6 +166,86 @@ Mat medianFilter(Mat img, int blur_size){
     return res;
 }
 
+//Performs a series of vision techniques that are useful together in finding the edges of a painting
+Mat edgify(Mat img){
+    
+    //Convert sub image to grayscale
+    Mat gray = grayscale(img);
+    
+    //Dilate the grayscale image to get rid of the less important edges
+    int structuring_element_size = 7; //TODO: test this value for the best results
+    Mat dil = dilate(gray,structuring_element_size);
+    
+    //Perform median filter to preserve edges and remove noise (https://en.wikipedia.org/wiki/Median_filter)
+    int blur_size = 7; //TODO: Test this value for the best results
+    Mat med = medianFilter(dil, blur_size);
+    
+    //The blog post does some 'shrinking and enlarging' here?
+    
+    //Perform canny edges to get the edges in the image
+    //Apparently a good way of finding the threshold for canny edges: https://stackoverflow.com/questions/4292249/automatic-calculation-of-low-and-high-thresholds-for-the-canny-operation-in-open
+    Mat rubbish;
+    double otsu_thresh_val = cv::threshold(med, rubbish, 0, 255, CV_THRESH_BINARY | CV_THRESH_OTSU);
+    double high_thresh_val  = otsu_thresh_val, lower_thresh_val = otsu_thresh_val * 0.5;
+    Mat edges;
+    //Canny(med, edges, low_threshold, high_threshold);
+    Canny(med, edges, lower_thresh_val, high_thresh_val);
+    
+    //Dilate the edges
+    int structuring_element_size_2 = 3;
+    Mat dil2 = dilate(edges,structuring_element_size_2);
+    
+    //Why use canny before hough lines: https://stackoverflow.com/questions/9310543/whats-the-use-of-canny-before-houghlines-opencv
+    
+    //Perform hough lines here
+    vector<Vec2f> lines;
+    HoughLines(dil2, lines, 1, CV_PI/180, 50, 50, 10 );
+    for( size_t i = 0; i < lines.size(); i++ ){
+        float rho = lines[i][0], theta = lines[i][1];
+        Point pt1, pt2;
+        double a = cos(theta), b = sin(theta);
+        double x0 = a*rho, y0 = b*rho;
+        pt1.x = cvRound(x0 + 1000*(-b));
+        pt1.y = cvRound(y0 + 1000*(a));
+        pt2.x = cvRound(x0 - 1000*(-b));
+        pt2.y = cvRound(y0 - 1000*(a));
+        line( img, pt1, pt2, Scalar(0,0,255), 1, CV_AA);
+    }
+    
+    
+    vector<Mat> color = {img};
+    display_images("Color",color);
+    waitKey(0);
+    
+    return dil2;
+}
+
+// Taken from https://stackoverflow.com/questions/30746327/get-a-single-line-representation-for-multiple-close-by-lines-clustered-together
+bool linesAreEqual(const Vec4i& _l1, const Vec4i& _l2)
+{
+    Vec4i l1(_l1), l2(_l2);
+    
+    float length1 = sqrtf((l1[2] - l1[0])*(l1[2] - l1[0]) + (l1[3] - l1[1])*(l1[3] - l1[1]));
+    float length2 = sqrtf((l2[2] - l2[0])*(l2[2] - l2[0]) + (l2[3] - l2[1])*(l2[3] - l2[1]));
+    
+    float product = (l1[2] - l1[0])*(l2[2] - l2[0]) + (l1[3] - l1[1])*(l2[3] - l2[1]);
+    
+    if (fabs(product / (length1 * length2)) < cos(CV_PI / 30))
+        return false;
+    
+    float mx1 = (l1[0] + l1[2]) * 0.5f;
+    float mx2 = (l2[0] + l2[2]) * 0.5f;
+    
+    float my1 = (l1[1] + l1[3]) * 0.5f;
+    float my2 = (l2[1] + l2[3]) * 0.5f;
+    float dist = sqrtf((mx1 - mx2)*(mx1 - mx2) + (my1 - my2)*(my1 - my2));
+    
+    if (dist > std::max(length1, length2) * 0.5f)
+        return false;
+    
+    return true;
+}
+
 vector<Rect> getPaintingLocations(Mat img, vector<Rect> sub_images){
     
     vector<Rect> painting_locations;
@@ -163,41 +254,113 @@ vector<Rect> getPaintingLocations(Mat img, vector<Rect> sub_images){
         
         //Following something along the lines of this right now... http://artsy.github.io/blog/2014/09/24/using-pattern-recognition-to-automatically-crop-framed-art/
         
-        cout << "1" << endl;
         //Create sub image to work with
         Mat sub_image = Mat(img,sub_images[i]);
-        cout << "2" << endl;
+        
+        
+        //Perform mean shift segmentation on the image
+        int spatial_radius = 7;
+        int color_radius = 7;
+        int maximum_pyramid_level = 1;
+        int color_diff = 10;
+        Mat meanS = meanShiftSegmentation(sub_image, spatial_radius, color_radius, maximum_pyramid_level);
+        Mat flood_image = floodFillRandom(meanS, color_diff);
+        
+        
         
         //Convert sub image to grayscale
         Mat gray = grayscale(sub_image);
+        
         
         //Dilate the grayscale image to get rid of the less important edges
         int structuring_element_size = 3; //TODO: test this value for the best results
         Mat dil = dilate(gray,structuring_element_size);
         
         //Perform median filter to preserve edges and remove noise (https://en.wikipedia.org/wiki/Median_filter)
-        int blur_size = 7; //TODO: Test this value for the best results
+        int blur_size = 3; //TODO: Test this value for the best results
         Mat med = medianFilter(dil, blur_size);
         
         //The blog post does some 'shrinking and enlarging' here?
+        
+        /*
+        //Harris Corner detection
+        int max_corners = 1000;
+        double quality = 0.1;
+        int minimum_distance = 40;
+        std::vector< cv::Point2f > corners;
+        vector<KeyPoint> keypoints;
+        goodFeaturesToTrack(med, corners, max_corners, quality, minimum_distance);
+        
+        Mat display_image = sub_image.clone();
+        for( size_t i = 0; i < corners.size(); i++ ){
+            cv::circle( display_image, corners[i], 3, cv::Scalar( 255. ), -1 );
+        }
+         */
+        /*
         
         //Perform canny edges to get the edges in the image
         //Apparently a good way of finding the threshold for canny edges: https://stackoverflow.com/questions/4292249/automatic-calculation-of-low-and-high-thresholds-for-the-canny-operation-in-open
         Mat rubbish;
         double otsu_thresh_val = cv::threshold(med, rubbish, 0, 255, CV_THRESH_BINARY | CV_THRESH_OTSU);
         double high_thresh_val  = otsu_thresh_val, lower_thresh_val = otsu_thresh_val * 0.5;
-        int low_threshold = 100;
-        int high_threshold = 300;
         Mat edges;
         //Canny(med, edges, low_threshold, high_threshold);
         Canny(med, edges, lower_thresh_val, high_thresh_val);
         
         //Dilate the edges
-        Mat dil2 = dilate(edges,structuring_element_size);
+        //int structuring_element_size_2 = 1;
+        //Mat dil2 = dilate(edges,structuring_element_size_2);
         
-        vector<Mat> color = {dil2};
+        //I think 'ConvexHull' is the opposite of bounding rectangle
+        
+        vector<Vec4i> lines;
+        int rho = 1;
+        double theta = 3.14/90;
+        int houghlines_threshold = 50;
+        int min_line_length = 40;
+        int min_line_gap = 10;
+        Mat hough_image = sub_image.clone();
+        //HoughLinesP(edges, lines, rho, theta,  houghlines_threshold,  min_line_length, min_line_gap);
+        HoughLinesP( edges, lines, 1, CV_PI/180, 80, 30, 10 );
+        RNG rng = theRNG();
+        for( size_t j = 0; j < lines.size(); j++ ){
+            Vec4i l = lines[j];
+            Scalar newVal( rng(256), rng(256), rng(256) );
+            line(hough_image, Point(l[0], l[1]), Point(l[2], l[3]), newVal, 1, CV_AA);
+        }
+        
+        //Find number of groups of lines that are similar
+        vector<int> labels;
+        int numberOfLines = cv::partition(lines, labels, linesAreEqual);
+        
+        vector<Vec4i> groupedLines;
+        Mat grouped_image = sub_image.clone();
+        //Group together all lines from the same group
+        for(int j=0;j<numberOfLines;j++){
+            int tlx = 2147483647; int tly = 2147483647; int brx = -1; int bry = -1;
+            for(int k=0;k<labels.size();k++){
+                if(labels[i]==j){
+                    tlx = min(tlx, lines[j][0]);
+                    tly = min(tly, lines[j][1]);
+                    brx = max(brx, lines[j][2]);
+                    bry = max(bry, lines[j][3]);
+                }
+            }
+            groupedLines.push_back({tlx,tly,brx,bry});
+        }
+        for( size_t j = 0; j < groupedLines.size(); j++ ){
+            Vec4i l = groupedLines[j];
+            Scalar newVal( rng(256), rng(256), rng(256) );
+            line(grouped_image, Point(l[0], l[1]), Point(l[2], l[3]), newVal, 2, CV_AA);
+        }
+        */
+        
+        vector<Mat> bw = {gray,dil,med};
+        vector<Mat> color = {sub_image,flood_image};
+        //display_images("bw",bw);
         display_images("Color",color);
         waitKey(0);
+        
         
         //Mat can = Scalar::all(0);
         //img.copyTo(can,edges);
@@ -220,11 +383,14 @@ void getHoles(Mat img,string path_to_output_folder,string image_name){
     int maximum_pyramid_level = 1;
     Mat meanS = meanShiftSegmentation(img, spatial_radius, color_radius, maximum_pyramid_level);
     
+    //edgify(meanS);
+    
+    
     //Get a mask of just the wallc
     Mat wall_mask = getWallMask(meanS,Scalar::all(2));
     
     //Dilate the wall mask to remove noise
-    int structuring_element_size = 10;
+    int structuring_element_size = 18;
     Mat dilated_wall_mask = dilate(wall_mask,structuring_element_size);
     
     //Invert the wall mask
@@ -236,11 +402,11 @@ void getHoles(Mat img,string path_to_output_folder,string image_name){
     findContours(inverted_wall_mask,contours,hierarchy,CV_RETR_TREE, CV_CHAIN_APPROX_NONE);
     
     //Get the locations of the sub images to check for paintings
-    vector<Rect> sub_images = getRectsAroundContours(contours,hierarchy);
+    vector<Rect> sub_images = getRectsAroundContours(img,contours,hierarchy);
     
     //Get location of painting in each sub image
     vector<Rect> painting_locations = getPaintingLocations(img,sub_images);
-    
+    /*
     //Check if any potential painting locations contain a painting from our database
     for(int i=0;i<painting_locations.size();i++){
         if(getPaintingMatch(img,painting_locations[i])!=""){
@@ -248,15 +414,19 @@ void getHoles(Mat img,string path_to_output_folder,string image_name){
             rectangle(img, painting_locations[i].tl(), painting_locations[i].br(), Scalar(255,255,255),3);
         }
     }
-    
+    */
+    Mat paints;
+    img.copyTo(paints, inverted_wall_mask);
     
     for(int i=0;i<sub_images.size();i++){
-        rectangle(img, sub_images[i].tl(), sub_images[i].br(), Scalar(255,255,255),3);
+        rectangle(paints, sub_images[i].tl(), sub_images[i].br(), Scalar(255,0,0),3);
     }
     
-    vector<Mat> color = {img};
+    /*
+    vector<Mat> color = {inverted_wall_mask};
     display_images("Color",color);
     waitKey(0);
+    */
 }
 
 Mat createWallMask(Mat img){
