@@ -246,6 +246,53 @@ bool linesAreEqual(const Vec4i& _l1, const Vec4i& _l2)
     return true;
 }
 
+vector<Point2f> harrisCornerDetection(Mat img, int max_corners, double quality, int minimum_distance){
+    vector<Point2f> corners;
+    goodFeaturesToTrack(img, corners, max_corners, quality, minimum_distance);
+    return corners;
+}
+
+Mat cannyEdgeDetection(Mat img){
+    Mat not_needed;
+    //Apparently a good way of finding the threshold for canny edges: https://stackoverflow.com/questions/4292249/automatic-calculation-of-low-and-high-thresholds-for-the-canny-operation-in-open
+    double otsu_thresh_val = cv::threshold(img, not_needed, 0, 255, CV_THRESH_BINARY | CV_THRESH_OTSU);
+    double high_thresh_val  = otsu_thresh_val, lower_thresh_val = otsu_thresh_val * 0.5;
+    Mat res;
+    Canny(img, res, lower_thresh_val, high_thresh_val);
+    return res;
+}
+
+vector<Vec4i> geoffHoughLines(Mat img, int rho, double theta, int hough_threshold, int min_line_length, int min_line_gap){
+    vector<Vec4i> lines;
+    HoughLinesP(img, lines, rho, theta, hough_threshold, min_line_length, min_line_gap);
+    return lines;
+}
+
+vector<Vec4i> groupHoughLines(vector<Vec4i> lines){
+    
+    //Find number of groups of lines that are similar
+    vector<int> labels;
+    int numberOfLines = cv::partition(lines, labels, linesAreEqual);
+    
+    vector<Vec4i> groupedLines;
+    //Group together all lines from the same group
+    for(int j=0;j<numberOfLines;j++){
+        int tlx = 2147483647; int tly = 2147483647; int brx = -1; int bry = -1;
+        for(int k=0;k<labels.size();k++){
+            if(labels[k]==j){
+                tlx = min(tlx, lines[j][0]);
+                tly = min(tly, lines[j][1]);
+                brx = max(brx, lines[j][2]);
+                bry = max(bry, lines[j][3]);
+            }
+        }
+        groupedLines.push_back({tlx,tly,brx,bry});
+    }
+    
+    return groupedLines;
+}
+
+
 vector<Rect> getPaintingLocations(Mat img, vector<Rect> sub_images){
     
     vector<Rect> painting_locations;
@@ -260,7 +307,7 @@ vector<Rect> getPaintingLocations(Mat img, vector<Rect> sub_images){
         
         //Perform mean shift segmentation on the image
         int spatial_radius = 7;
-        int color_radius = 7;
+        int color_radius = 13;
         int maximum_pyramid_level = 1;
         int color_diff = 10;
         Mat meanS = meanShiftSegmentation(sub_image, spatial_radius, color_radius, maximum_pyramid_level);
@@ -282,81 +329,27 @@ vector<Rect> getPaintingLocations(Mat img, vector<Rect> sub_images){
         
         //The blog post does some 'shrinking and enlarging' here?
         
-        /*
-        //Harris Corner detection
-        int max_corners = 1000;
-        double quality = 0.1;
-        int minimum_distance = 40;
-        std::vector< cv::Point2f > corners;
-        vector<KeyPoint> keypoints;
-        goodFeaturesToTrack(med, corners, max_corners, quality, minimum_distance);
-        
-        Mat display_image = sub_image.clone();
-        for( size_t i = 0; i < corners.size(); i++ ){
-            cv::circle( display_image, corners[i], 3, cv::Scalar( 255. ), -1 );
-        }
-         */
-        /*
-        
-        //Perform canny edges to get the edges in the image
-        //Apparently a good way of finding the threshold for canny edges: https://stackoverflow.com/questions/4292249/automatic-calculation-of-low-and-high-thresholds-for-the-canny-operation-in-open
-        Mat rubbish;
-        double otsu_thresh_val = cv::threshold(med, rubbish, 0, 255, CV_THRESH_BINARY | CV_THRESH_OTSU);
-        double high_thresh_val  = otsu_thresh_val, lower_thresh_val = otsu_thresh_val * 0.5;
-        Mat edges;
-        //Canny(med, edges, low_threshold, high_threshold);
-        Canny(med, edges, lower_thresh_val, high_thresh_val);
-        
-        //Dilate the edges
-        //int structuring_element_size_2 = 1;
-        //Mat dil2 = dilate(edges,structuring_element_size_2);
-        
         //I think 'ConvexHull' is the opposite of bounding rectangle
         
+        Mat edges = cannyEdgeDetection(med);
+        
         vector<Vec4i> lines;
-        int rho = 1;
-        double theta = 3.14/90;
-        int houghlines_threshold = 50;
-        int min_line_length = 40;
-        int min_line_gap = 10;
-        Mat hough_image = sub_image.clone();
-        //HoughLinesP(edges, lines, rho, theta,  houghlines_threshold,  min_line_length, min_line_gap);
+        
         HoughLinesP( edges, lines, 1, CV_PI/180, 80, 30, 10 );
+        
+        vector<Vec4i> groupedLines = groupHoughLines(lines);
+    
+        Mat groupedImage = sub_image.clone();
         RNG rng = theRNG();
-        for( size_t j = 0; j < lines.size(); j++ ){
-            Vec4i l = lines[j];
-            Scalar newVal( rng(256), rng(256), rng(256) );
-            line(hough_image, Point(l[0], l[1]), Point(l[2], l[3]), newVal, 1, CV_AA);
-        }
-        
-        //Find number of groups of lines that are similar
-        vector<int> labels;
-        int numberOfLines = cv::partition(lines, labels, linesAreEqual);
-        
-        vector<Vec4i> groupedLines;
-        Mat grouped_image = sub_image.clone();
-        //Group together all lines from the same group
-        for(int j=0;j<numberOfLines;j++){
-            int tlx = 2147483647; int tly = 2147483647; int brx = -1; int bry = -1;
-            for(int k=0;k<labels.size();k++){
-                if(labels[i]==j){
-                    tlx = min(tlx, lines[j][0]);
-                    tly = min(tly, lines[j][1]);
-                    brx = max(brx, lines[j][2]);
-                    bry = max(bry, lines[j][3]);
-                }
-            }
-            groupedLines.push_back({tlx,tly,brx,bry});
-        }
         for( size_t j = 0; j < groupedLines.size(); j++ ){
             Vec4i l = groupedLines[j];
             Scalar newVal( rng(256), rng(256), rng(256) );
-            line(grouped_image, Point(l[0], l[1]), Point(l[2], l[3]), newVal, 2, CV_AA);
+            line(groupedImage, Point(l[0], l[1]), Point(l[2], l[3]), newVal, 2, CV_AA);
         }
-        */
+        
         
         vector<Mat> bw = {gray,dil,med};
-        vector<Mat> color = {sub_image,flood_image};
+        vector<Mat> color = {sub_image,meanS,flood_image,groupedImage};
         //display_images("bw",bw);
         display_images("Color",color);
         waitKey(0);
