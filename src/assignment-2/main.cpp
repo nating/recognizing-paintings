@@ -124,7 +124,7 @@ Mat getWallMask(Mat& img,Scalar color_difference){
     return wall_mask;
 }
 
-vector<Rect> getRectsAroundContours(Mat img,vector<vector<Point>> contours, vector<Vec4i> hierarchy){
+vector<Rect> getBoundingRectsAroundContours(Mat img,vector<vector<Point>> contours, vector<Vec4i> hierarchy){
     
     vector<Rect> rects;
     
@@ -148,9 +148,41 @@ vector<Rect> getRectsAroundContours(Mat img,vector<vector<Point>> contours, vect
     return rects;
 }
 
+vector<RotatedRect> getMinAreaRectsAroundContours(Mat img,vector<vector<Point>> contours, vector<Vec4i> hierarchy){
+    
+    vector<RotatedRect> rects;
+    
+    if ( !contours.empty() && !hierarchy.empty() ) {
+        for ( int i=0; i<contours.size(); i++ ) {
+            RotatedRect bounder = minAreaRect(contours[i]);
+            Point2f rect_points[4];
+            bounder.points( rect_points );
+            
+            //TODO: Maybe replace these conditions again when you have things working
+            
+            //Check that the rect is smaller than the entire image and bigger than a certain size
+            if(rect_points[0].y -rect_points[2].y <img.rows*img.cols && (rect_points[0].x-rect_points[2].x)*(rect_points[0].y-rect_points[2].y)>150*150){
+                
+                //Extra to remove floors when programming
+                if(contourArea(contours[i])>(rect_points[0].x-rect_points[2].x)*(rect_points[0].y-rect_points[2].y)*.6){
+                    rects.push_back(bounder);
+                }
+            }
+            
+        }
+    }
+    return rects;
+}
+
 Mat dilate(Mat img,int se_size,int shape=MORPH_RECT){
     Mat res;
     dilate(img,res,getStructuringElement(shape, Size(se_size,se_size)));
+    return res;
+}
+
+Mat erode(Mat img,int se_size,int shape=MORPH_RECT){
+    Mat res;
+    erode(img,res,getStructuringElement(shape, Size(se_size,se_size)));
     return res;
 }
 
@@ -268,6 +300,8 @@ vector<Vec4i> geoffHoughLines(Mat img, int rho, double theta, int hough_threshol
     return lines;
 }
 
+
+
 vector<Vec4i> groupHoughLines(vector<Vec4i> lines){
     
     //Find number of groups of lines that are similar
@@ -280,10 +314,10 @@ vector<Vec4i> groupHoughLines(vector<Vec4i> lines){
         int tlx = 2147483647; int tly = 2147483647; int brx = -1; int bry = -1;
         for(int k=0;k<labels.size();k++){
             if(labels[k]==j){
-                tlx = min(tlx, lines[j][0]);
-                tly = min(tly, lines[j][1]);
-                brx = max(brx, lines[j][2]);
-                bry = max(bry, lines[j][3]);
+                tlx = min(tlx, lines[k][0]);
+                tly = min(tly, lines[k][1]);
+                brx = max(brx, lines[k][2]);
+                bry = max(bry, lines[k][3]);
             }
         }
         groupedLines.push_back({tlx,tly,brx,bry});
@@ -292,75 +326,99 @@ vector<Vec4i> groupHoughLines(vector<Vec4i> lines){
     return groupedLines;
 }
 
+//https://stackoverflow.com/questions/15888180/calculating-the-angle-between-points
+float angleBetween(const Point &v1, const Point &v2)
+{
+    float len1 = sqrt(v1.x * v1.x + v1.y * v1.y);
+    float len2 = sqrt(v2.x * v2.x + v2.y * v2.y);
+    
+    float dot = v1.x * v2.x + v1.y * v2.y;
+    
+    float a = dot / (len1 * len2);
+    
+    if (a >= 1.0)
+        return 0.0;
+    else if (a <= -1.0)
+        return CV_PI;
+    else
+        return acos(a); // 0..PI
+}
 
-vector<Rect> getPaintingLocations(Mat img, vector<Rect> sub_images){
+vector<Rect> getPaintingLocations(Mat img, Mat mask, vector<Rect> sub_frames){
     
     vector<Rect> painting_locations;
     
-    for(int i=0;i<sub_images.size();i++){
-        
-        //Following something along the lines of this right now... http://artsy.github.io/blog/2014/09/24/using-pattern-recognition-to-automatically-crop-framed-art/
+    for(int i=0;i<sub_frames.size();i++){
         
         //Create sub image to work with
-        Mat sub_image = Mat(img,sub_images[i]);
+        Mat sub_image = Mat(img,sub_frames[i]);
+        Mat sub_mask = Mat(mask,sub_frames[i]);
+        int painting_ratio = max(sub_image.rows,sub_image.cols)*.1;
         
+        //Erode the image to get rid of things attached to the frames
+        int erosion_structuring_element_size = 60;
+        Mat err = erode(sub_mask,erosion_structuring_element_size);
         
-        //Perform mean shift segmentation on the image
-        int spatial_radius = 7;
-        int color_radius = 13;
-        int maximum_pyramid_level = 1;
-        int color_diff = 10;
-        Mat meanS = meanShiftSegmentation(sub_image, spatial_radius, color_radius, maximum_pyramid_level);
-        Mat flood_image = floodFillRandom(meanS, color_diff);
+        //Blur the image to smooth the lines of the object of interest
+        int blur_size = 31;
+        Mat med = medianFilter(err, blur_size);
         
-        
-        
-        //Convert sub image to grayscale
-        Mat gray = grayscale(sub_image);
-        
-        
-        //Dilate the grayscale image to get rid of the less important edges
-        int structuring_element_size = 3; //TODO: test this value for the best results
-        Mat dil = dilate(gray,structuring_element_size);
-        
-        //Perform median filter to preserve edges and remove noise (https://en.wikipedia.org/wiki/Median_filter)
-        int blur_size = 3; //TODO: Test this value for the best results
-        Mat med = medianFilter(dil, blur_size);
-        
-        //The blog post does some 'shrinking and enlarging' here?
-        
-        //I think 'ConvexHull' is the opposite of bounding rectangle
-        
+        //Get an edge image
         Mat edges = cannyEdgeDetection(med);
         
+        //Find lines in the edge image
         vector<Vec4i> lines;
-        
-        HoughLinesP( edges, lines, 1, CV_PI/180, 80, 30, 10 );
-        
-        vector<Vec4i> groupedLines = groupHoughLines(lines);
-    
-        Mat groupedImage = sub_image.clone();
-        RNG rng = theRNG();
-        for( size_t j = 0; j < groupedLines.size(); j++ ){
-            Vec4i l = groupedLines[j];
-            Scalar newVal( rng(256), rng(256), rng(256) );
-            line(groupedImage, Point(l[0], l[1]), Point(l[2], l[3]), newVal, 2, CV_AA);
+        HoughLinesP( edges, lines, 1, CV_PI/180, 0, painting_ratio*1.5, painting_ratio);
+        Mat grouped = sub_image.clone();
+        Mat sudoku = cv::Mat::zeros(sub_image.size(), CV_8UC1);
+        for( size_t i = 0; i < lines.size(); i++ )
+        {
+            float angle = atan2(lines[i][1] - lines[i][3], lines[i][0] - lines[i][2]);
+            
+            angle = angle * 180 / CV_PI;
+            
+            int length = max(sub_image.rows,sub_image.cols);
+            Point P1(lines[i][0], lines[i][1]);
+            Point P2,P3;
+            
+            P2.x =  (int)round(P1.x + length * cos(angle * CV_PI / 180.0));
+            P2.y =  (int)round(P1.y + length * sin(angle * CV_PI / 180.0));
+            
+            P3.x =  (int)round(P1.x - length * cos(angle * CV_PI / 180.0));
+            P3.y =  (int)round(P1.y - length * sin(angle * CV_PI / 180.0));
+            
+            line( sudoku, P3,
+                 P2, Scalar(255), 10, 8 );
         }
         
+        //Do connected components on the sudoku image
+        vector<vector<Point>> contours;
+        vector<Vec4i> hierarchy;
+        findContours(invert(sudoku),contours,hierarchy,CV_RETR_TREE, CV_CHAIN_APPROX_NONE);
         
-        vector<Mat> bw = {gray,dil,med};
-        vector<Mat> color = {sub_image,meanS,flood_image,groupedImage};
-        //display_images("bw",bw);
+        int max_contour = 0;
+        for(int j=0;j<contours.size();j++){
+            if(contours[j].size() > contours[max_contour].size()){
+                max_contour = j;
+            }
+        }
+        
+        drawContours(sub_image, contours, max_contour, Scalar(0,0,255)); //This draws white on the pixels in the contour on the mask.
+        
+        
+        //Need to do an affine transformation here. Thinking about the code here: http://opencvexamples.blogspot.com/2014/01/perspective-transform.html
+        //M = getPerspectiveTransform(rect, dst);
+        //warped = warpPerspective(image, M, (maxWidth, maxHeight));
+        
+        
+        vector<Mat> bw = {sub_mask,err,med,edges,sudoku};
+        vector<Mat> color = {sub_image};
+        display_images("bw",bw);
         display_images("Color",color);
         waitKey(0);
-        
-        
-        //Mat can = Scalar::all(0);
-        //img.copyTo(can,edges);
-        
     }
     
-    return sub_images;
+    return painting_locations;
 }
 
 string getPaintingMatch(Mat img, Rect painting_location){
@@ -394,11 +452,13 @@ void getHoles(Mat img,string path_to_output_folder,string image_name){
     vector<Vec4i> hierarchy;
     findContours(inverted_wall_mask,contours,hierarchy,CV_RETR_TREE, CV_CHAIN_APPROX_NONE);
     
+    Mat rects = img.clone();
     //Get the locations of the sub images to check for paintings
-    vector<Rect> sub_images = getRectsAroundContours(img,contours,hierarchy);
+    vector<Rect> sub_images = getBoundingRectsAroundContours(inverted_wall_mask,contours,hierarchy);
     
     //Get location of painting in each sub image
-    vector<Rect> painting_locations = getPaintingLocations(img,sub_images);
+    vector<Rect> painting_locations = getPaintingLocations(img,inverted_wall_mask,sub_images);
+    
     /*
     //Check if any potential painting locations contain a painting from our database
     for(int i=0;i<painting_locations.size();i++){
@@ -408,16 +468,25 @@ void getHoles(Mat img,string path_to_output_folder,string image_name){
         }
     }
     */
+    /*
     Mat paints;
     img.copyTo(paints, inverted_wall_mask);
-    
     for(int i=0;i<sub_images.size();i++){
-        rectangle(paints, sub_images[i].tl(), sub_images[i].br(), Scalar(255,0,0),3);
+        Point2f rect_points[4]; sub_images[i].points( rect_points );
+        line(paints, rect_points[0], rect_points[1], Scalar(255,0,0), 1, 8 );
+        line(paints, rect_points[1], rect_points[2], Scalar(255,0,0), 1, 8 );
+        line(paints, rect_points[2], rect_points[3], Scalar(255,0,0), 1, 8 );
+        line(paints, rect_points[3], rect_points[0], Scalar(255,0,0), 1, 8 );
     }
+    */
+    
+    
     
     /*
-    vector<Mat> color = {inverted_wall_mask};
+    vector<Mat> color = {img};
+    vector<Mat> bw = {inverted_wall_mask,err,med,edges};
     display_images("Color",color);
+    display_images("bw",bw);
     waitKey(0);
     */
 }
