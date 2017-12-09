@@ -11,6 +11,10 @@
 
 #include <iostream>
 #include <opencv2/opencv.hpp>
+#include <opencv2/core/core.hpp>
+#include <opencv2/highgui/highgui.hpp>
+#include <opencv2/imgproc.hpp>
+#include <opencv2/features2d.hpp>
 #include <opencv2/xfeatures2d.hpp>
 #include "json.hpp" //https://github.com/nlohmann/json
 #include <fstream>
@@ -355,64 +359,7 @@ vector<Point2f> orderCorners(vector<Point2f> corners){
     
     return corners;
 }
-/*
-void MatchingMethod(Mat img, Mat templ, int match_method );
 
-int main( int, char** argv )
-{
-    /// Load image and template
-    Mat img = imread( argv[1], 1 );
-    imshow("Input image", img);
-    Mat templ = img( Rect(100, 100, 100, 100) );
-    imshow("Template", templ);
-    
-    // "Method: \n 0: SQDIFF \n 1: SQDIFF NORMED \n 2: TM CCORR \n 3: TM CCORR NORMED \n 4: TM COEFF \n 5: TM COEFF NORMED";
-    int method = atoi(argv[2])/20;
-    
-    MatchingMethod( img, templ, method);
-    
-    waitKey(0);
-    return 0;
-}
-
-void MatchingMethod(Mat img, Mat templ, int match_method  )
-{
-    /// Source image to display
-    Mat img_display, result;
-    img.copyTo( img_display );
-    
-    /// Create the result matrix
-    int result_cols =  img.cols - templ.cols + 1;
-    int result_rows = img.rows - templ.rows + 1;
-    
-    result.create( result_rows, result_cols, CV_32FC1 );
-    
-    /// Do the Matching and Normalize
-    matchTemplate( img, templ, result, match_method );
-    normalize( result, result, 0, 1, NORM_MINMAX, -1, Mat() );
-    
-    /// Localizing the best match with minMaxLoc
-    double minVal; double maxVal; Point minLoc; Point maxLoc;
-    Point matchLoc;
-    
-    minMaxLoc( result, &minVal, &maxVal, &minLoc, &maxLoc, Mat() );
-    
-    
-    /// For SQDIFF and SQDIFF_NORMED, the best matches are lower values. For all the other methods, the higher the better
-    if( match_method  == TM_SQDIFF || match_method == TM_SQDIFF_NORMED )
-    { matchLoc = minLoc; }
-    else
-    { matchLoc = maxLoc; }
-    
-    /// Show me what you got
-    rectangle( img_display, matchLoc, Point( matchLoc.x + templ.cols , matchLoc.y + templ.rows ), Scalar::all(0), 2, 8, 0 );
-    rectangle( result, matchLoc, Point( matchLoc.x + templ.cols , matchLoc.y + templ.rows ), Scalar(0,0,255), 2, 8, 0 );
-    
-    imshow( "Template Location in Image", img_display );
-    imshow( "Result", result );
-    
-    return;
-}*/
 
 Mat affineTransform(Mat img, vector<Point2f> corners, Mat ideal_mat){
     
@@ -437,7 +384,7 @@ Mat affineTransform(Mat img, vector<Point2f> corners, Mat ideal_mat){
     lambda = Mat::zeros(ideal_mat.rows,ideal_mat.cols, ideal_mat.type() );
     lambda = getPerspectiveTransform( inputQuad, outputQuad );
     // Apply the Perspective Transform just found to the src image
-    warpPerspective(ideal_mat,res,lambda,res.size() );
+    warpPerspective(img,res,lambda,ideal_mat.size() );
     
     return res;
 }
@@ -537,12 +484,28 @@ vector<Rect> getPaintingLocations(Mat img, Mat mask, vector<Rect> sub_frames){
             cv::Rect cropp(third_of_width+1, third_of_height+1, 2*third_of_width-1, 2*third_of_height-1);
             Mat temp = painting(cropp);
             
+            Ptr<Feature2D> f2d = xfeatures2d::SIFT::create();
+            vector<KeyPoint> trans_keypoints;
+            f2d->detect(trans, trans_keypoints);
+            Mat trans_descriptors;
+            f2d->compute(trans, trans_keypoints, trans_descriptors);
             
+            vector<KeyPoint> painting_keypoints;
+            f2d->detect(painting, painting_keypoints);
+            Mat painting_descriptors;
+            f2d->compute(painting, painting_keypoints, painting_descriptors);
+            
+            BFMatcher matcher = BFMatcher(NORM_L2, true);
+            vector<DMatch> matches;
+            matcher.match(trans_descriptors, painting_descriptors, matches);
+            
+            Mat outImg;
+            drawMatches(trans, trans_keypoints, painting, painting_keypoints, matches, outImg);
             
             //vector<Mat> bw = {sub_mask,err,med,edges,sudoku,painting_mask,corne};
             //vector<Mat> color = {res};
             //vector<Mat> color1 = {trans,painting};
-            vector<Mat> tempp = {display_image};
+            vector<Mat> tempp = {outImg};
             display_images("bw",tempp);
             //display_images("Color",color);
             //display_images("Color1",color1);
