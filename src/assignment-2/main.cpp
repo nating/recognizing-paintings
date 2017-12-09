@@ -11,6 +11,7 @@
 
 #include <iostream>
 #include <opencv2/opencv.hpp>
+#include <opencv2/xfeatures2d.hpp>
 #include "json.hpp" //https://github.com/nlohmann/json
 #include <fstream>
 #include "vision-techniques.h"
@@ -344,6 +345,103 @@ float angleBetween(const Point &v1, const Point &v2)
         return acos(a); // 0..PI
 }
 
+vector<Point2f> orderCorners(vector<Point2f> corners){
+    
+    struct sortY { bool operator() (cv::Point pt1, cv::Point pt2) { return (pt1.y < pt2.y);} } mySortY;
+    struct sortX { bool operator() (cv::Point pt1, cv::Point pt2) { return (pt1.x < pt2.x);} } mySortX;
+    std::sort(corners.begin(),corners.end(),mySortY);
+    std::sort(corners.begin(),corners.begin()+2,mySortX);
+    std::sort(corners.begin()+2,corners.end(),mySortX);
+    
+    return corners;
+}
+/*
+void MatchingMethod(Mat img, Mat templ, int match_method );
+
+int main( int, char** argv )
+{
+    /// Load image and template
+    Mat img = imread( argv[1], 1 );
+    imshow("Input image", img);
+    Mat templ = img( Rect(100, 100, 100, 100) );
+    imshow("Template", templ);
+    
+    // "Method: \n 0: SQDIFF \n 1: SQDIFF NORMED \n 2: TM CCORR \n 3: TM CCORR NORMED \n 4: TM COEFF \n 5: TM COEFF NORMED";
+    int method = atoi(argv[2])/20;
+    
+    MatchingMethod( img, templ, method);
+    
+    waitKey(0);
+    return 0;
+}
+
+void MatchingMethod(Mat img, Mat templ, int match_method  )
+{
+    /// Source image to display
+    Mat img_display, result;
+    img.copyTo( img_display );
+    
+    /// Create the result matrix
+    int result_cols =  img.cols - templ.cols + 1;
+    int result_rows = img.rows - templ.rows + 1;
+    
+    result.create( result_rows, result_cols, CV_32FC1 );
+    
+    /// Do the Matching and Normalize
+    matchTemplate( img, templ, result, match_method );
+    normalize( result, result, 0, 1, NORM_MINMAX, -1, Mat() );
+    
+    /// Localizing the best match with minMaxLoc
+    double minVal; double maxVal; Point minLoc; Point maxLoc;
+    Point matchLoc;
+    
+    minMaxLoc( result, &minVal, &maxVal, &minLoc, &maxLoc, Mat() );
+    
+    
+    /// For SQDIFF and SQDIFF_NORMED, the best matches are lower values. For all the other methods, the higher the better
+    if( match_method  == TM_SQDIFF || match_method == TM_SQDIFF_NORMED )
+    { matchLoc = minLoc; }
+    else
+    { matchLoc = maxLoc; }
+    
+    /// Show me what you got
+    rectangle( img_display, matchLoc, Point( matchLoc.x + templ.cols , matchLoc.y + templ.rows ), Scalar::all(0), 2, 8, 0 );
+    rectangle( result, matchLoc, Point( matchLoc.x + templ.cols , matchLoc.y + templ.rows ), Scalar(0,0,255), 2, 8, 0 );
+    
+    imshow( "Template Location in Image", img_display );
+    imshow( "Result", result );
+    
+    return;
+}*/
+
+Mat affineTransform(Mat img, vector<Point2f> corners, Mat ideal_mat){
+    
+    Mat res;
+
+    corners = orderCorners(corners);
+    
+    Point2f inputQuad[4];
+    inputQuad[0] = corners[0];
+    inputQuad[1] = corners[1];
+    inputQuad[2] = corners[3];
+    inputQuad[3] = corners[2];
+    
+    Point2f outputQuad[4];
+    outputQuad[0] = Point2f( 0,0 );
+    outputQuad[1] = Point2f(ideal_mat.cols-1,0);
+    outputQuad[2] = Point2f(ideal_mat.cols-1,ideal_mat.rows-1);
+    outputQuad[3] = Point2f( 0,ideal_mat.rows-1);
+    
+    // Get the Perspective Transform Matrix i.e. lambda
+    Mat lambda( 2, 4, CV_32FC1 );
+    lambda = Mat::zeros(ideal_mat.rows,ideal_mat.cols, ideal_mat.type() );
+    lambda = getPerspectiveTransform( inputQuad, outputQuad );
+    // Apply the Perspective Transform just found to the src image
+    warpPerspective(ideal_mat,res,lambda,res.size() );
+    
+    return res;
+}
+
 vector<Rect> getPaintingLocations(Mat img, Mat mask, vector<Rect> sub_frames){
     
     vector<Rect> painting_locations;
@@ -403,19 +501,55 @@ vector<Rect> getPaintingLocations(Mat img, Mat mask, vector<Rect> sub_frames){
             }
         }
         
-        drawContours(sub_image, contours, max_contour, Scalar(0,0,255)); //This draws white on the pixels in the contour on the mask.
+        //Create a mask image of just the painting in the mask
+        Mat painting_mask = cv::Mat::zeros(sub_image.size(), CV_8UC1);
+        drawContours(painting_mask, contours, max_contour, Scalar(255),CV_FILLED);
         
+        //Perform Corner detection on the painting mask image
+        double corner_quality = .001;
+        int minimum_distance = 20;
+        vector<Point2f> corners = harrisCornerDetection(painting_mask, 4, corner_quality, minimum_distance);
         
-        //Need to do an affine transformation here. Thinking about the code here: http://opencvexamples.blogspot.com/2014/01/perspective-transform.html
-        //M = getPerspectiveTransform(rect, dst);
-        //warped = warpPerspective(image, M, (maxWidth, maxHeight));
+        Mat corne = cv::Mat::zeros(sub_image.size(), CV_8UC1);
+        for( size_t i = 0; i < corners.size(); i++ )
+        {
+            cv::circle( corne, corners[i], 10, cv::Scalar( 255. ), -1 );
+        }
         
+        //Check the features of the found painting against
+        int number_of_paintings = 6;
+        string path_to_painting_images = "/Users/GeoffreyNatin/Documents/GithubRepositories/recognizing-paintings/assets/paintings/";
+        vector<Mat> paintings;
+        for(int i=0;i<number_of_paintings;i++){
+            string painting_image_name = "Painting"+to_string(i+1)+".jpg";
+            Mat painting = imread(path_to_painting_images+painting_image_name);
+            if(painting.empty()){ cout << "Image "+to_string(i)+" empty" << endl; continue;}
+            
+            //Mat g = grayscale(painting);
+            //Mat sg = grayscale(sub_image);
+            
+            //Perform an Affine Transformation on the found painting
+            Mat trans = affineTransform(sub_image, corners, painting);
+            
+            //Crop the original painting to get a template from the centre of the painting
+            int third_of_width = painting.cols/3;
+            int third_of_height = painting.rows/3;
+            cv::Rect cropp(third_of_width+1, third_of_height+1, 2*third_of_width-1, 2*third_of_height-1);
+            Mat temp = painting(cropp);
+            
+            
+            
+            //vector<Mat> bw = {sub_mask,err,med,edges,sudoku,painting_mask,corne};
+            //vector<Mat> color = {res};
+            //vector<Mat> color1 = {trans,painting};
+            vector<Mat> tempp = {display_image};
+            display_images("bw",tempp);
+            //display_images("Color",color);
+            //display_images("Color1",color1);
+            waitKey(0);
+        }
+        cout << endl ;
         
-        vector<Mat> bw = {sub_mask,err,med,edges,sudoku};
-        vector<Mat> color = {sub_image};
-        display_images("bw",bw);
-        display_images("Color",color);
-        waitKey(0);
     }
     
     return painting_locations;
