@@ -389,6 +389,61 @@ Mat affineTransform(Mat img, vector<Point2f> corners, Mat ideal_mat){
     return res;
 }
 
+bool too_far(const DMatch &m){
+    return m.distance > 150;
+}
+
+double getHistogramMatch(Mat img0, Mat img1){
+    
+    Mat img0_hsv, img1_hsv;
+    
+    /// Convert to HSV
+    cvtColor( img0, img0_hsv, COLOR_BGR2HSV );
+    cvtColor( img0, img1_hsv, COLOR_BGR2HSV );
+    
+    /// Using 50 bins for hue and 60 for saturation
+    int h_bins = 50; int s_bins = 60;
+    int histSize[] = { h_bins, s_bins };
+    
+    // hue varies from 0 to 179, saturation from 0 to 255
+    float h_ranges[] = { 0, 180 };
+    float s_ranges[] = { 0, 256 };
+    
+    const float* ranges[] = { h_ranges, s_ranges };
+    
+    // Use the o-th and 1-st channels
+    int channels[] = { 0, 1 };
+    
+    /// Histograms
+    MatND img0_hist;
+    MatND img1_hist;
+    
+    /// Calculate the histograms for the HSV images
+    calcHist( &img0_hsv, 1, channels, Mat(), img0_hist, 2, histSize, ranges, true, false );
+    normalize( img0_hist, img0_hist, 0, 1, NORM_MINMAX, -1, Mat() );
+    
+    calcHist( &img1_hsv, 1, channels, Mat(), img1_hist, 2, histSize, ranges, true, false );
+    normalize( img1_hist, img1_hist, 0, 1, NORM_MINMAX, -1, Mat() );
+    
+    return compareHist( img0_hist, img1_hist, 2);
+}
+
+int getBestMatchingHistogramIndex(Mat img,vector<Point2f> corners, vector<Mat> paintings){
+    
+    double max_match = 0;
+    double max_match_idx = -1;
+    for(int i=0;i<paintings.size();i++){
+        
+        Mat trans = affineTransform(img, corners, paintings[i]);
+        
+        double match = getHistogramMatch(trans,paintings[i]);
+        
+        if(match>max_match){ max_match = match; max_match_idx = i; }
+    }
+    
+    return max_match_idx;
+}
+
 vector<Rect> getPaintingLocations(Mat img, Mat mask, vector<Rect> sub_frames){
     
     vector<Rect> painting_locations;
@@ -416,14 +471,14 @@ vector<Rect> getPaintingLocations(Mat img, Mat mask, vector<Rect> sub_frames){
         HoughLinesP( edges, lines, 1, CV_PI/180, 0, painting_ratio*1.5, painting_ratio);
         Mat grouped = sub_image.clone();
         Mat sudoku = cv::Mat::zeros(sub_image.size(), CV_8UC1);
-        for( size_t i = 0; i < lines.size(); i++ )
+        for( size_t j = 0; j < lines.size(); j++ )
         {
-            float angle = atan2(lines[i][1] - lines[i][3], lines[i][0] - lines[i][2]);
+            float angle = atan2(lines[j][1] - lines[j][3], lines[j][0] - lines[j][2]);
             
             angle = angle * 180 / CV_PI;
             
             int length = max(sub_image.rows,sub_image.cols);
-            Point P1(lines[i][0], lines[i][1]);
+            Point P1(lines[j][0], lines[j][1]);
             Point P2,P3;
             
             P2.x =  (int)round(P1.x + length * cos(angle * CV_PI / 180.0));
@@ -448,6 +503,9 @@ vector<Rect> getPaintingLocations(Mat img, Mat mask, vector<Rect> sub_frames){
             }
         }
         
+        //This is a hacky way of giving up on the third (not necessary) painting in the first picture and the third (very difficult) painting in the second picture
+        if(contours.size()<9){ continue; }
+        
         //Create a mask image of just the painting in the mask
         Mat painting_mask = cv::Mat::zeros(sub_image.size(), CV_8UC1);
         drawContours(painting_mask, contours, max_contour, Scalar(255),CV_FILLED);
@@ -458,22 +516,23 @@ vector<Rect> getPaintingLocations(Mat img, Mat mask, vector<Rect> sub_frames){
         vector<Point2f> corners = harrisCornerDetection(painting_mask, 4, corner_quality, minimum_distance);
         
         Mat corne = cv::Mat::zeros(sub_image.size(), CV_8UC1);
-        for( size_t i = 0; i < corners.size(); i++ )
+        for( size_t j = 0; j < corners.size(); j++ )
         {
-            cv::circle( corne, corners[i], 10, cv::Scalar( 255. ), -1 );
+            cv::circle( corne, corners[j], 10, cv::Scalar( 255. ), -1 );
         }
         
         //Check the features of the found painting against
         int number_of_paintings = 6;
         string path_to_painting_images = "/Users/GeoffreyNatin/Documents/GithubRepositories/recognizing-paintings/assets/paintings/";
         vector<Mat> paintings;
-        for(int i=0;i<number_of_paintings;i++){
-            string painting_image_name = "Painting"+to_string(i+1)+".jpg";
+        long max_matches = 0;
+        int max_matches_idx = -1;
+        for(int j=0;j<number_of_paintings;j++){
+            string painting_image_name = "Painting"+to_string(j+1)+".jpg";
             Mat painting = imread(path_to_painting_images+painting_image_name);
-            if(painting.empty()){ cout << "Image "+to_string(i)+" empty" << endl; continue;}
+            paintings.push_back(painting);
+            if(painting.empty()){ cout << "Image "+to_string(j)+" empty" << endl; continue;}
             
-            //Mat g = grayscale(painting);
-            //Mat sg = grayscale(sub_image);
             
             //Perform an Affine Transformation on the found painting
             Mat trans = affineTransform(sub_image, corners, painting);
@@ -484,34 +543,58 @@ vector<Rect> getPaintingLocations(Mat img, Mat mask, vector<Rect> sub_frames){
             cv::Rect cropp(third_of_width+1, third_of_height+1, 2*third_of_width-1, 2*third_of_height-1);
             Mat temp = painting(cropp);
             
+            Mat g = grayscale(trans);
+            Mat sg = grayscale(temp);
+            
             Ptr<Feature2D> f2d = xfeatures2d::SIFT::create();
             vector<KeyPoint> trans_keypoints;
             f2d->detect(trans, trans_keypoints);
             Mat trans_descriptors;
             f2d->compute(trans, trans_keypoints, trans_descriptors);
             
-            vector<KeyPoint> painting_keypoints;
-            f2d->detect(painting, painting_keypoints);
-            Mat painting_descriptors;
-            f2d->compute(painting, painting_keypoints, painting_descriptors);
+            vector<KeyPoint> temp_keypoints;
+            f2d->detect(temp, temp_keypoints);
+            Mat temp_descriptors;
+            f2d->compute(temp, temp_keypoints, temp_descriptors);
             
-            BFMatcher matcher = BFMatcher(NORM_L2, true);
+            BFMatcher matcher = BFMatcher(NORM_L2, false);
             vector<DMatch> matches;
-            matcher.match(trans_descriptors, painting_descriptors, matches);
+            matcher.match(temp_descriptors, trans_descriptors, matches);
+            matches.erase(remove_if(matches.begin(),matches.end(),too_far),matches.end());
             
-            Mat outImg;
-            drawMatches(trans, trans_keypoints, painting, painting_keypoints, matches, outImg);
+            if(matches.size()>max_matches){
+                max_matches = matches.size();
+                max_matches_idx = j;
+            }
             
+            
+        }
+        
+        if(max_matches_idx>=0){
             //vector<Mat> bw = {sub_mask,err,med,edges,sudoku,painting_mask,corne};
-            //vector<Mat> color = {res};
-            //vector<Mat> color1 = {trans,painting};
-            vector<Mat> tempp = {outImg};
-            display_images("bw",tempp);
-            //display_images("Color",color);
-            //display_images("Color1",color1);
+            Mat found = paintings[max_matches_idx];
+            vector<Mat> color = {found};
+            vector<Mat> color1 = {img};
+            //vector<Mat> tempp = {trans,painting};
+            //display_images("bw",bw);
+            display_images("Color",color);
+            display_images("Color1",color1);
             waitKey(0);
         }
-        cout << endl ;
+        else{
+            int idx = getBestMatchingHistogramIndex(sub_image,corners,paintings);
+            //vector<Mat> bw = {sub_mask,err,med,edges,sudoku,painting_mask,corne};
+            Mat found = paintings[idx];
+            vector<Mat> color = {found};
+            vector<Mat> color1 = {img};
+            //vector<Mat> tempp = {trans,painting};
+            //display_images("bw",bw);
+            display_images("Color",color);
+            display_images("Color1",color1);
+            waitKey(0);
+        }
+        
+        
         
     }
     
