@@ -48,6 +48,7 @@ public:
 
 //----------------------------------Classes for Recognition of paintings in galleries------------------------------
 
+//This class represents a recognised gallery and its images.
 class RecognisedPainting{
 public:
     string name;
@@ -559,29 +560,11 @@ vector<Point2f> getPaintingCorners(Mat img, Mat mask){
     double corner_quality = .001;
     int minimum_distance = 20;
     corners = harrisCornerDetection(painting_contour, 4, corner_quality, minimum_distance);
-    
-    
-    //Create mask image of painting locations for ground truths
-    Mat gts = cv::Mat::zeros(img.size(), CV_8UC1);
-    corners = orderCorners(corners);
-    vector<Point> ps;
-    ps.push_back(corners[0]);
-    ps.push_back(corners[1]);
-    ps.push_back(corners[3]);
-    ps.push_back(corners[2]);
-    
-        fillConvexPoly(gts, ps, Scalar(255));
-    Mat aff_img;
-    img.copyTo(aff_img,gts);
-    
-    vector<Mat> color = {aff_img};
-    display_images("Gallery 0",color);
-    waitKey(0);
-    
+
     return corners;
 }
 
-//
+//Returns the corners translated by the point
 vector<Point2f> translateCorners(vector<Point2f> corners, Point tl){
     
     vector<Point2f> translated;
@@ -594,7 +577,7 @@ vector<Point2f> translateCorners(vector<Point2f> corners, Point tl){
     return translated;
 }
 
-//
+//Returns the points translated by the point
 vector<Point> translatePoints(vector<Point> points, Point tl){
     
     vector<Point> translated;
@@ -806,6 +789,7 @@ int main(int argc, char** argv){
         Mat rec = gallery_images[i].clone();
         for(int j=0;j<g.recognised_paintings.size();j++){
             
+            //Find the right points to position the text above the recognised painting
             int top = 2147483647;
             int bottom = 0;
             int left = 2147483647;
@@ -817,27 +801,23 @@ int main(int argc, char** argv){
                 right = max(g.recognised_paintings[j].frameLocation[k].x,right);
             }
             
+            //Draw the name of the painting aboved the recognised painting
             string text = g.recognised_paintings[j].name;
             int baseline = 0;
             Size text_size = getTextSize(text, FONT_HERSHEY_SIMPLEX, 1, 2,&baseline);
             putText(rec, text, Point(left+(right-left)/2-text_size.width/2,top-text_size.height) , FONT_HERSHEY_SIMPLEX, 1, Scalar(0,0,0),2);
             
+            //Draw the outline of the painting
             vector<Point2f> cs = orderCorners(g.recognised_paintings[j].painting_corners);
             line(rec,cs[0],cs[1],Scalar(0,0,255),5);
             line(rec,cs[1],cs[3],Scalar(0,0,255),5);
             line(rec,cs[2],cs[3],Scalar(0,0,255),5);
             line(rec,cs[2],cs[0],Scalar(0,0,255),5);
-            
-            /*
-            vector<vector<Point>> contours; contours.push_back(g.recognised_paintings[j].painting_points);
-            drawContours(rec, contours, 0, Scalar(0,255,0),CV_FILLED);
-            */
         }
         
         vector<Mat> color = {rec};
         display_images("Gallery 0",color);
         waitKey(0);
-         
         
         g.name = "Gallery"+to_string(i);
         recognised_galleries.push_back(g);
