@@ -104,8 +104,8 @@ The algorithm for connected components involves:
 
 Once connected components analysis has been performed on the image, there is a record of the points that are contained in every component.
 
-**TODO: Stretch goal: Each component in the image flood filled to a different colour, to show that the components have been found:**  
-<img src="./assets/connected/Notice0.jpg"/>
+**Each non-wall component in the image flood filled to a different colour, to show that the components have been found:**  
+<img src="./assets/report-images/non-wall-components.png"/>
 
 ### 5: Refine list of components found
 
@@ -117,8 +117,8 @@ The components must be:
 
 These criteria restrict paintings that are able to be located and recognised by the program. It is a possibility that some paintings that are different shapes than quadrilaterals, such as circles or triangles may not be categorised as paintings by the program. Also, very small paintings or pictures of paintings that have been taken very far away from the painting might not work either, if they do not fall under these criteria.
 
-**TODO: Stretch goal: Each painting component in the image flood filled to a different colour, to show the reduced component list:**  
-<img src="./assets/report-images/mask-example.jpg"/>
+**Each framed-painting component in the image flood filled to a different colour, to show the reduced component list:**  
+<img src="./assets/report-images/frame-components.png"/>
 
 ### 6: Erode components to remove things attached to the frames
 
@@ -161,7 +161,7 @@ Lines can all be represented as an orthogonal distance to the origin and an angl
 **The lines found in the component's edge image:**  
 <img src="./assets/lines-of-components/Frame1.png"/>
 
-### Create a mask from the painting's edges
+### 10: Create a mask from the painting's edges
 
 Using the lines from hough lines, a mask is created to isolate the component that is enclosed by the lines. This is necessary to get the four corners needed to apply an Affine Transformation on the painting for recognition.
 
@@ -170,7 +170,7 @@ A mask of the image is created, with every pixel set to have a value of zero. Th
 **The mask of the vertical and horizontal lines of the painting:**  
 <img src="./assets/sudoku-images/Frame1.png"/>
 
-### Isolate Painting component from mask
+### 11: Isolate Painting component from mask
 
 The largest component from the *sudoku-like* mask is taken and drawn on a new mask, so that this mask can be used to find the four corners necessary for the transformation.
 
@@ -182,7 +182,9 @@ The largest component from the *sudoku-like* mask is taken and drawn on a new ma
  **Example of painting locating failure:**  
  <img src="./assets/report-images/example-of-painting-failure.png"/>
 
-### Corner Detection on painting component
+ *(This also causes the third painting of the first gallery (not recognised in the ground truth images) to not be recognised)*
+
+### 12: Corner Detection on painting component
 
 The mask of the painting component is used to find the corners necessary to transform the located painting before comparing it to the saved images of the paintings. The program uses Harris corner detection to locate the corners in the mask.
 
@@ -191,7 +193,7 @@ Harris corner detection works by looking at regions of the image that generate a
 **The corners of the painting mask having been found:**  
 <img src="./assets/component-corners/Frame1.png"/>
 
-### Transform the located painting
+### 13: Transform the located painting
 
 In order to compare the features of the located painting and the saved images of the paintings from the galleries, the program performs an Affine Transformation on the paintings using the corners found. The located paintings are transformed to have the same dimensions as whatever painting it is being compared to in the following step.
 
@@ -200,7 +202,7 @@ An Affine Transformation is  done by translating every pixel in an image to a ne
 **An example of the located painting being transformed to the have the same dimensions as a painting it is compared to:**  
 <img src="./assets/report-images/affine-transformation-example.png"/>
 
-### Match features from the located painting to saved painting images
+### 14: Match features from the located painting to saved painting images
 
 The program uses Scale Invariant Feature Transform (*SIFT*) to find features in the paintings, and checks how many matches the located painting has with each of the saved paintings. The painting with the highest amount of matches is chosen as the painting to classify the located painting as.
 
@@ -209,7 +211,7 @@ In SIFT, local minima and maxima of the difference of gaussians applied to versi
 **Matches between the located painting and the corresponding saved painting:**  
 <img src="./assets/report-images/sift-matches-example.png"/>
 
-### Histogram Comparisons for paintings with no feature matches
+### 15: Histogram Comparisons for paintings with no feature matches
 
 In the event that there are no sufficient matches *(matches within a euclidean distance of less than or equal to 150 from each other)* with any saved painting for a located painting, a histogram comparison is performed for every saved painting in order to see which saved painting has the most similar histogram to the located painting. The painting with the best matching histogram is chosen as the painting to classify the located painting as.
 
