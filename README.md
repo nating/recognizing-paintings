@@ -186,32 +186,34 @@ The largest component from the *sudoku-like* mask is taken and drawn on a new ma
 
 The mask of the painting component is used to find the corners necessary to transform the located painting before comparing it to the saved images of the paintings. The program uses Harris corner detection to locate the corners in the mask.
 
-Harris corner detection works by looking at regions of the image that generate a lot of variation when moved around. Windows of the image are taken and compared to overlapping windows in the image to see how much of a variation there is when the window is moved.
+Harris corner detection works by looking at regions of the image that generate a lot of variation when moved around. Windows of the image are taken and compared to overlapping windows in the image to see how much of a variation there is when the window is moved to their positions.
 
 **The corners of the painting mask having been found:**  
 <img src="./assets/component-corners/Frame1.png"/>
 
 ### Transform the located painting
 
-In order to compare the features of the located painting and the saved images of the paintings from the galleries, the program performs an Affine Transformation on the paintings using the corners found. The located paintings are transformed to have the same dimensions as whatever painting is is being compared to in the following step.
+In order to compare the features of the located painting and the saved images of the paintings from the galleries, the program performs an Affine Transformation on the paintings using the corners found. The located paintings are transformed to have the same dimensions as whatever painting it is being compared to in the following step.
 
-**An example of the located painting being transformed to the same dimensions as a painting it is compared to:**  
+An Affine Transformation is  done by translating every pixel in an image to a new location. The transformation is defined by a matrix multiplication, that can be found when the translation of some points are known. In the affine transformation applied to each found painting, the program knows that the four corner points are to be translated to the positions of the four corners in the painting it is being matched with.
+
+**An example of the located painting being transformed to the have the same dimensions as a painting it is compared to:**  
 <img src="./assets/report-images/affine-transformation-example.png"/>
 
 ### Match features from the located painting to saved painting images
 
 The program uses Scale Invariant Feature Transform (*SIFT*) to find features in the paintings, and checks how many matches the located painting has with each of the saved paintings. The painting with the highest amount of matches is chosen as the painting to classify the located painting as.
 
-< TODO: How does SIFT work? How does the comparing of the features to get 'matches' work? >
+In SIFT, local minima and maxima of the difference of gaussians applied to versions of the image at different scales are taken to be 'key points'. Key points are found for the two images being compared and, the program checks to see if the key points are shared between the two images. The program only considers 'matching' key points that are less than a certain euclidean distance *(150)* from each other.
 
 **Matches between the located painting and the corresponding saved painting:**  
 <img src="./assets/report-images/sift-matches-example.png"/>
 
 ### Histogram Comparisons for paintings with no feature matches
 
-In the event that there are no sufficient (*TODO: by sufficient, we mean with a distance of less than 150 (what does this mean?)*) matches with any saved painting for a located painting, a histogram comparison is for every saved painting in order to see which saved painting has the most similar histogram to the located painting. The painting with the best matching histogram is chosen as the painting to classify the located painting as.
+In the event that there are no sufficient matches *(matches within a euclidean distance of less than or equal to 150 from each other)* with any saved painting for a located painting, a histogram comparison is performed for every saved painting in order to see which saved painting has the most similar histogram to the located painting. The painting with the best matching histogram is chosen as the painting to classify the located painting as.
 
-< TODO: Write up how the histograms are got, how the comparisons are done, what the comparison method used is >
+Histograms are made for the Hue and Saturation of each image. This involves making 'bins' for each possible Hue or Saturation value in the image, counting up the amount of pixels in the image that have that Hue or Saturation value. The images' histograms are then compared to see which of the saved painting images has the the most similar histogram to the histogram of the located painting.
 
 Only one of the located paintings from the test images needed this extra step, and it is shown below.
 
@@ -232,7 +234,7 @@ The Accuracy, Recall & Precision of the program for each test image was also cal
 
 A correct recognition of a painting is considered a True Positive, and an unrecognised painting is considered a False Negative. An incorrect recognition of a painting would be considered a False Positive.
 
-The program is not classifying that a painting is not present. Therefore all occurrences of TN in the above equations are set to zero.
+The program is not classifying **that** 'a particular painting is *not* present'. Therefore all occurrences of TN in the above equations are set to zero.
 
 Here are the calculated metrics for test each image (the first images are the results of the program, and the second images are the suggested ground truths):
 
@@ -251,7 +253,7 @@ Metric|Result|
 ---|---|
 Average DICE Coefficient|**0.742338**
 Accuracy|0.666666
-Recall|1
+Recall|0.666666
 Precision|1
 <img src="./assets/results-with-painting-numbers/Gallery2.png"/>
 <img src="./assets/gallery_ground_truth_images/Gallery2.jpg"/>
@@ -281,13 +283,30 @@ Here are the average metrics across all 4 test images:
 Metric|Result  
 ---|---|
 Average DICE coefficient|**0.849253**
-Accuracy|10/11 TODO: Do these and make sure you get the right answer
-Recall|1
+Accuracy|0.909091
+Recall|0.909091
 Precision|1
 
 
 ## 5. Discussion of Results
 
+The results of the program are good. Only one of the ground truth paintings to be recognised was not recognised by the program. This was due to the frame of the painting overlapping with another in the test image:  
+<img src="./assets/report-images/joined-frames.png"/>
 
+It is a restriction of the program that paintings and their frames can not overlap with other paintings or their frames in the image of the gallery.
 
-## 6. Closing Notes for Improvement
+The DICE coefficients are not perfect. Apart from missing an entire painting, the '**locates**' the paintings with an inaccuracy of roughly 15%. This is because the solution is not perfect. It is somewhat clear where the solution veers from perfection, and that is after finding the components that represent the paintings and their frames. In order to **accurately** find the actual location of the painting in the image, the frame should be found in this component and removed. Unfortunately the program does not do this for reasons discussed in the technical details of the solution.
+
+## 6. Closing Notes for Improvement and Reliability of the Program
+
+### How this solution can be improved
+
+For the solution to be improved, the inside of the frames should be accurately found within the non-wall components of the image. It is made difficult as frames are made up of different colours, and the contents of the painting should not be assumed.
+
+### Where this program will fail
+
+This program fails when:
+* Frames overlap
+* Paintings are too small in the image *(less than 150x150px)*
+* The shape of paintings are not quadrilaterals
+* The frames of paintings are wider than 15% of the image (This is because erosion alone will not remove enough of the frames for feature matching or histogram comparisons to be accurate)
