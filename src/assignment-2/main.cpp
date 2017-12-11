@@ -25,12 +25,16 @@ using json = nlohmann::json;
 using namespace cv;
 using namespace std;
 
-//-------------------------------------------------- FUNCTIONS ---------------------------------------------------------
+//-------------------------------------------------- Classes ---------------------------------------------------------
+
+//----------------------------------Classes for Generating ground truths------------------------------
 
 //This class represents a painting from a gallery.
 class Painting{
 public:
     string name;
+    string title;
+    Mat image;
     vector<Point> points;
 };
 
@@ -38,13 +42,36 @@ public:
 class Gallery{
 public:
     string name;
+    Mat image;
     vector<Painting> paintings;
 };
 
+//----------------------------------Classes for Recognition of paintings in galleries------------------------------
+
+class RecognisedPainting{
+public:
+    string name;
+    string title;
+    Mat image;
+    vector<Point> frameLocation;
+    vector<Point2f> painting_corners;
+    vector<Point> painting_points;
+};
+
+//This class represents the bounding rectangle of a segment from a mean-shift-segmented image. It has the bounding rectangle and the color of the segment.
+class RecognisedGallery{
+public:
+    string name;
+    Mat image;
+    vector<RecognisedPainting> recognised_paintings;
+};
+
+
+//-------------------------------------------------- FUNCTIONS ---------------------------------------------------------
 
 
 //This function takes a Gallery corresponding to the input image and creates a copy of the original image with its paintings' names and locations drawn onto it
-void create_output_image(string path_to_output_image,string path_to_original_image,Gallery gallery){
+void create_ground_truth_gallery_image(string path_to_output_image,string path_to_original_image,Gallery gallery){
     Mat output_image = imread(path_to_original_image);
     for(int i=0;i<gallery.paintings.size();i++){
         
@@ -88,6 +115,8 @@ vector<Gallery> read_gallery_ground_truths(string path_to_ground_truths_json){
             Painting p;
             string p_name = z.value()["name"];
             p.name = p_name;
+            string p_title = z.value()["title"];
+            p.title = p_title;
             vector<Point> points;
             for (json::iterator t = z.value()["points"].begin(); t != z.value()["points"].end(); ++t) {
                 points.push_back(Point(t.value()[0],t.value()[1]));
@@ -102,7 +131,7 @@ vector<Gallery> read_gallery_ground_truths(string path_to_ground_truths_json){
 }
 
 //Returns a version of the image where the wall is white and the rest of the image is black.
-Mat getWallMask(Mat& img,Scalar color_difference){
+Mat getMaskOfLargestSegment(Mat& img,Scalar color_difference){
     CV_Assert( !img.empty() );
     RNG rng = theRNG();
     Mat cl = img.clone();
@@ -129,137 +158,76 @@ Mat getWallMask(Mat& img,Scalar color_difference){
     return wall_mask;
 }
 
-vector<Rect> getBoundingRectsAroundContours(Mat img,vector<vector<Point>> contours, vector<Vec4i> hierarchy){
-    
+//Returns the bounding rectangles of the contours
+vector<Rect> getBoundingRectsAroundContours(Mat img,vector<vector<Point>> contours){
     vector<Rect> rects;
-    
-    if ( !contours.empty() && !hierarchy.empty() ) {
+    if ( !contours.empty() ) {
         for ( int i=0; i<contours.size(); i++ ) {
             Rect bounder = boundingRect(contours[i]);
-            
-            //TODO: Maybe replace these conditions again when you have things working
-            
-            //Check that the rect is smaller than the entire image and bigger than a certain size
-            if(bounder.width*bounder.height<img.rows*img.cols && bounder.width*bounder.height>150*150){
-                
-                //Extra to remove floors when programming
-                if(contourArea(contours[i])>bounder.width*bounder.height*.6){
-                    rects.push_back(bounder);
-                }
-            }
-            
+            rects.push_back(bounder);
         }
     }
     return rects;
 }
 
-vector<RotatedRect> getMinAreaRectsAroundContours(Mat img,vector<vector<Point>> contours, vector<Vec4i> hierarchy){
+//Returns true if the painting does not take up the entire image, is bigger than 'width' * 'height', and it's contour takes up a percentage of its bounding rectangle's area
+bool couldBePainting(Mat img,Rect bounder,vector<Point> contour,int width,int height,double area_percentage){
     
-    vector<RotatedRect> rects;
+    //Check that the rect is smaller than the entire image and bigger than a certain size
+    if(bounder.width*bounder.height<img.rows*img.cols && bounder.width*bounder.height>width*height){
+        
+        //Extra to remove floors when programming
+        if(contourArea(contour)>bounder.width*bounder.height*.6){
+            return true;
+        }
+    }
+    return false;
+}
+
+//Returns the indexes of the contours whos bouding rectangles are bigger than 'min_width' * 'min_height' and whos take up more than min_area_percentage of their bounding rectangle
+vector<vector<Point>> getPossiblePaintingContours(Mat img,vector<vector<Point>> contours, int min_width=150, int min_height=150, double min_area_percentage=.6){
     
-    if ( !contours.empty() && !hierarchy.empty() ) {
+    vector<vector<Point>> painting_contours;
+    
+    if ( !contours.empty() ) {
         for ( int i=0; i<contours.size(); i++ ) {
-            RotatedRect bounder = minAreaRect(contours[i]);
-            Point2f rect_points[4];
-            bounder.points( rect_points );
-            
-            //TODO: Maybe replace these conditions again when you have things working
-            
-            //Check that the rect is smaller than the entire image and bigger than a certain size
-            if(rect_points[0].y -rect_points[2].y <img.rows*img.cols && (rect_points[0].x-rect_points[2].x)*(rect_points[0].y-rect_points[2].y)>150*150){
-                
-                //Extra to remove floors when programming
-                if(contourArea(contours[i])>(rect_points[0].x-rect_points[2].x)*(rect_points[0].y-rect_points[2].y)*.6){
-                    rects.push_back(bounder);
-                }
-            }
-            
+            Rect bounder = boundingRect(contours[i]);
+            if( couldBePainting(img, bounder, contours[i], min_width, min_height, min_area_percentage)){ painting_contours.push_back(contours[i]); }
         }
     }
-    return rects;
+    return painting_contours;
 }
 
+//Returns a dilated version of the image
 Mat dilate(Mat img,int se_size,int shape=MORPH_RECT){
     Mat res;
     dilate(img,res,getStructuringElement(shape, Size(se_size,se_size)));
     return res;
 }
 
+//Returns an eroded version of the image
 Mat erode(Mat img,int se_size,int shape=MORPH_RECT){
     Mat res;
     erode(img,res,getStructuringElement(shape, Size(se_size,se_size)));
     return res;
 }
 
+//Returns an inverted version of the image
 Mat invert(Mat img){
     Mat res;
     bitwise_not(img, res);
     return res;
 }
 
+//Returns a version of the image with a median filter having been applied to it
 Mat medianFilter(Mat img, int blur_size){
     Mat res;
     medianBlur(img, res, blur_size);
     return res;
 }
 
-//Performs a series of vision techniques that are useful together in finding the edges of a painting
-Mat edgify(Mat img){
-    
-    //Convert sub image to grayscale
-    Mat gray = grayscale(img);
-    
-    //Dilate the grayscale image to get rid of the less important edges
-    int structuring_element_size = 7; //TODO: test this value for the best results
-    Mat dil = dilate(gray,structuring_element_size);
-    
-    //Perform median filter to preserve edges and remove noise (https://en.wikipedia.org/wiki/Median_filter)
-    int blur_size = 7; //TODO: Test this value for the best results
-    Mat med = medianFilter(dil, blur_size);
-    
-    //The blog post does some 'shrinking and enlarging' here?
-    
-    //Perform canny edges to get the edges in the image
-    //Apparently a good way of finding the threshold for canny edges: https://stackoverflow.com/questions/4292249/automatic-calculation-of-low-and-high-thresholds-for-the-canny-operation-in-open
-    Mat rubbish;
-    double otsu_thresh_val = cv::threshold(med, rubbish, 0, 255, CV_THRESH_BINARY | CV_THRESH_OTSU);
-    double high_thresh_val  = otsu_thresh_val, lower_thresh_val = otsu_thresh_val * 0.5;
-    Mat edges;
-    //Canny(med, edges, low_threshold, high_threshold);
-    Canny(med, edges, lower_thresh_val, high_thresh_val);
-    
-    //Dilate the edges
-    int structuring_element_size_2 = 3;
-    Mat dil2 = dilate(edges,structuring_element_size_2);
-    
-    //Why use canny before hough lines: https://stackoverflow.com/questions/9310543/whats-the-use-of-canny-before-houghlines-opencv
-    
-    //Perform hough lines here
-    vector<Vec2f> lines;
-    HoughLines(dil2, lines, 1, CV_PI/180, 50, 50, 10 );
-    for( size_t i = 0; i < lines.size(); i++ ){
-        float rho = lines[i][0], theta = lines[i][1];
-        Point pt1, pt2;
-        double a = cos(theta), b = sin(theta);
-        double x0 = a*rho, y0 = b*rho;
-        pt1.x = cvRound(x0 + 1000*(-b));
-        pt1.y = cvRound(y0 + 1000*(a));
-        pt2.x = cvRound(x0 - 1000*(-b));
-        pt2.y = cvRound(y0 - 1000*(a));
-        line( img, pt1, pt2, Scalar(0,0,255), 1, CV_AA);
-    }
-    
-    
-    vector<Mat> color = {img};
-    display_images("Color",color);
-    waitKey(0);
-    
-    return dil2;
-}
-
-// Taken from https://stackoverflow.com/questions/30746327/get-a-single-line-representation-for-multiple-close-by-lines-clustered-together
-bool linesAreEqual(const Vec4i& _l1, const Vec4i& _l2)
-{
+//Returns true if lines are similar enough in angle and position
+bool linesAreEqual(const Vec4i& _l1, const Vec4i& _l2){
     Vec4i l1(_l1), l2(_l2);
     
     float length1 = sqrtf((l1[2] - l1[0])*(l1[2] - l1[0]) + (l1[3] - l1[1])*(l1[3] - l1[1]));
@@ -283,12 +251,14 @@ bool linesAreEqual(const Vec4i& _l1, const Vec4i& _l2)
     return true;
 }
 
+//Returns the corners found in the image using Harris Corner detection with different parameters
 vector<Point2f> harrisCornerDetection(Mat img, int max_corners, double quality, int minimum_distance){
     vector<Point2f> corners;
     goodFeaturesToTrack(img, corners, max_corners, quality, minimum_distance);
     return corners;
 }
 
+//Returns an edge version of the image (Found using Canny)
 Mat cannyEdgeDetection(Mat img){
     Mat not_needed;
     //Apparently a good way of finding the threshold for canny edges: https://stackoverflow.com/questions/4292249/automatic-calculation-of-low-and-high-thresholds-for-the-canny-operation-in-open
@@ -299,14 +269,14 @@ Mat cannyEdgeDetection(Mat img){
     return res;
 }
 
+//Returns the lines found from performing HoughLinesP on the image
 vector<Vec4i> geoffHoughLines(Mat img, int rho, double theta, int hough_threshold, int min_line_length, int min_line_gap){
     vector<Vec4i> lines;
     HoughLinesP(img, lines, rho, theta, hough_threshold, min_line_length, min_line_gap);
     return lines;
 }
 
-
-
+//Groups similar lines in angle and position together and returns this new vector of lines
 vector<Vec4i> groupHoughLines(vector<Vec4i> lines){
     
     //Find number of groups of lines that are similar
@@ -331,12 +301,14 @@ vector<Vec4i> groupHoughLines(vector<Vec4i> lines){
     return groupedLines;
 }
 
-//https://stackoverflow.com/questions/15888180/calculating-the-angle-between-points
-float angleBetween(const Point &v1, const Point &v2)
-{
+//Returns the angle between two lines https://stackoverflow.com/questions/15888180/calculating-the-angle-between-points
+float angleBetween(const Point &v1, const Point &v2) {
+    
+    //Get the length of both lines
     float len1 = sqrt(v1.x * v1.x + v1.y * v1.y);
     float len2 = sqrt(v2.x * v2.x + v2.y * v2.y);
     
+    //Get the dot product of the two lines
     float dot = v1.x * v2.x + v1.y * v2.y;
     
     float a = dot / (len1 * len2);
@@ -349,6 +321,7 @@ float angleBetween(const Point &v1, const Point &v2)
         return acos(a); // 0..PI
 }
 
+//This function takes four corners and returns the corners in the order tl, tr, br, bl.
 vector<Point2f> orderCorners(vector<Point2f> corners){
     
     struct sortY { bool operator() (cv::Point pt1, cv::Point pt2) { return (pt1.y < pt2.y);} } mySortY;
@@ -360,253 +333,338 @@ vector<Point2f> orderCorners(vector<Point2f> corners){
     return corners;
 }
 
-
+//Returns an Affine Transformed version of the image, where the 'corners' in the original image have been translated to the corners of the 'ideal_mat'.
 Mat affineTransform(Mat img, vector<Point2f> corners, Mat ideal_mat){
     
-    Mat res;
-
+    //Order input corners of the image tl, tr, br, bl
     corners = orderCorners(corners);
     
-    Point2f inputQuad[4];
-    inputQuad[0] = corners[0];
-    inputQuad[1] = corners[1];
-    inputQuad[2] = corners[3];
-    inputQuad[3] = corners[2];
+    //Create the FROM points
+    Point2f inputQuad[4]; inputQuad[0] = corners[0]; inputQuad[1] = corners[1]; inputQuad[2] = corners[3]; inputQuad[3] = corners[2];
     
-    Point2f outputQuad[4];
-    outputQuad[0] = Point2f( 0,0 );
-    outputQuad[1] = Point2f(ideal_mat.cols-1,0);
-    outputQuad[2] = Point2f(ideal_mat.cols-1,ideal_mat.rows-1);
-    outputQuad[3] = Point2f( 0,ideal_mat.rows-1);
+    //Create the TO points
+    Point2f outputQuad[4]; outputQuad[0] = Point2f( 0,0 ); outputQuad[1] = Point2f(ideal_mat.cols-1,0); outputQuad[2] = Point2f(ideal_mat.cols-1,ideal_mat.rows-1); outputQuad[3] = Point2f( 0,ideal_mat.rows-1);
     
-    // Get the Perspective Transform Matrix i.e. lambda
+    //Get the Perspective Transform Matrix i.e. lambda
     Mat lambda( 2, 4, CV_32FC1 );
     lambda = Mat::zeros(ideal_mat.rows,ideal_mat.cols, ideal_mat.type() );
     lambda = getPerspectiveTransform( inputQuad, outputQuad );
-    // Apply the Perspective Transform just found to the src image
-    warpPerspective(img,res,lambda,ideal_mat.size() );
     
+    // Apply the Perspective Transform to the image
+    Mat res;
+    warpPerspective(img,res,lambda,ideal_mat.size() );
     return res;
 }
 
+//Returns whether a match has a distance of more than 150
 bool too_far(const DMatch &m){
     return m.distance > 150;
 }
 
+//Returns the value of the Histogram Comparison of the two images (using the Intersection method https://docs.opencv.org/2.4/modules/imgproc/doc/histograms.html?highlight=comparehist#comparehist)
 double getHistogramMatch(Mat img0, Mat img1){
     
+    //Get HSV versions of the images
     Mat img0_hsv, img1_hsv;
-    
-    /// Convert to HSV
     cvtColor( img0, img0_hsv, COLOR_BGR2HSV );
     cvtColor( img0, img1_hsv, COLOR_BGR2HSV );
     
-    /// Using 50 bins for hue and 60 for saturation
+    //Use 50 bins for hue and 60 for saturation
     int h_bins = 50; int s_bins = 60;
     int histSize[] = { h_bins, s_bins };
     
-    // hue varies from 0 to 179, saturation from 0 to 255
+    //Set ranges for hue from 0 to 179 and saturation from 0 to 255
     float h_ranges[] = { 0, 180 };
     float s_ranges[] = { 0, 256 };
-    
     const float* ranges[] = { h_ranges, s_ranges };
     
-    // Use the o-th and 1-st channels
+    //Use the 0-th and 1-st channels of the histograms for the comparison
     int channels[] = { 0, 1 };
     
-    /// Histograms
+    // Create the Histograms for both images
     MatND img0_hist;
-    MatND img1_hist;
-    
-    /// Calculate the histograms for the HSV images
     calcHist( &img0_hsv, 1, channels, Mat(), img0_hist, 2, histSize, ranges, true, false );
     normalize( img0_hist, img0_hist, 0, 1, NORM_MINMAX, -1, Mat() );
     
+    MatND img1_hist;
     calcHist( &img1_hsv, 1, channels, Mat(), img1_hist, 2, histSize, ranges, true, false );
     normalize( img1_hist, img1_hist, 0, 1, NORM_MINMAX, -1, Mat() );
     
+    //Compare the two histograms
     return compareHist( img0_hist, img1_hist, 2);
 }
 
+//Returns the index of painting in 'paintings' that has the closest histogram to the affine transformed version of the sub-image of 'img' that is can be found at 'corners'
 int getBestMatchingHistogramIndex(Mat img,vector<Point2f> corners, vector<Mat> paintings){
     
-    double max_match = 0;
-    double max_match_idx = -1;
+    double best_match = 0;
+    double best_match_idx = -1;
+    
+    //For each painting, calculate how much of a match its histogram has to the sub-image
     for(int i=0;i<paintings.size();i++){
         
+        //Affine transform the sub-image
         Mat trans = affineTransform(img, corners, paintings[i]);
         
+        //Compare the histograms of the transformed sub-image and the painting
         double match = getHistogramMatch(trans,paintings[i]);
         
-        if(match>max_match){ max_match = match; max_match_idx = i; }
+        //Update the best match
+        if(match>best_match){ best_match = match; best_match_idx = i; }
     }
     
-    return max_match_idx;
+    return best_match_idx;
 }
 
-vector<Rect> getPaintingLocations(Mat img, Mat mask, vector<Rect> sub_frames){
+//Returns the index of painting in 'paintings' that has the closest histogram to the affine transformed version of the sub-image of 'img' that is can be found at 'corners'
+int getBestMatchingHistogramIndex(Mat img,vector<Point2f> corners, vector<Painting> paintings){
     
-    vector<Rect> painting_locations;
+    double best_match = 0;
+    double best_match_idx = -1;
     
-    for(int i=0;i<sub_frames.size();i++){
+    //For each painting, calculate how much of a match its histogram has to the sub-image
+    for(int i=0;i<paintings.size();i++){
         
-        //Create sub image to work with
-        Mat sub_image = Mat(img,sub_frames[i]);
-        Mat sub_mask = Mat(mask,sub_frames[i]);
-        int painting_ratio = max(sub_image.rows,sub_image.cols)*.1;
+        //Affine transform the sub-image
+        Mat trans = affineTransform(img, corners, paintings[i].image);
         
-        //Erode the image to get rid of things attached to the frames
-        int erosion_structuring_element_size = 60;
-        Mat err = erode(sub_mask,erosion_structuring_element_size);
+        //Compare the histograms of the transformed sub-image and the painting
+        double match = getHistogramMatch(trans,paintings[i].image);
         
-        //Blur the image to smooth the lines of the object of interest
-        int blur_size = 31;
-        Mat med = medianFilter(err, blur_size);
+        //Update the best match
+        if(match>best_match){ best_match = match; best_match_idx = i; }
+    }
+    
+    return best_match_idx;
+}
+
+//Returns a version of the image where the lines have been drawn on it in 'color' (extended to reach across the entire image)
+Mat extendLinesAcrossImage(Mat img, vector<Vec4i> lines, Scalar color){
+    
+    Mat res = img.clone();
+    
+    for( size_t j = 0; j < lines.size(); j++ ){
+        float angle = atan2(lines[j][1] - lines[j][3], lines[j][0] - lines[j][2]);
         
-        //Get an edge image
-        Mat edges = cannyEdgeDetection(med);
+        angle = angle * 180 / CV_PI;
         
-        //Find lines in the edge image
-        vector<Vec4i> lines;
-        HoughLinesP( edges, lines, 1, CV_PI/180, 0, painting_ratio*1.5, painting_ratio);
-        Mat grouped = sub_image.clone();
-        Mat sudoku = cv::Mat::zeros(sub_image.size(), CV_8UC1);
-        for( size_t j = 0; j < lines.size(); j++ )
-        {
-            float angle = atan2(lines[j][1] - lines[j][3], lines[j][0] - lines[j][2]);
-            
-            angle = angle * 180 / CV_PI;
-            
-            int length = max(sub_image.rows,sub_image.cols);
-            Point P1(lines[j][0], lines[j][1]);
-            Point P2,P3;
-            
-            P2.x =  (int)round(P1.x + length * cos(angle * CV_PI / 180.0));
-            P2.y =  (int)round(P1.y + length * sin(angle * CV_PI / 180.0));
-            
-            P3.x =  (int)round(P1.x - length * cos(angle * CV_PI / 180.0));
-            P3.y =  (int)round(P1.y - length * sin(angle * CV_PI / 180.0));
-            
-            line( sudoku, P3,
-                 P2, Scalar(255), 10, 8 );
+        int length = max(img.rows,img.cols);
+        Point P1(lines[j][0], lines[j][1]);
+        Point P2,P3;
+        
+        P2.x =  (int)round(P1.x + length * cos(angle * CV_PI / 180.0));
+        P2.y =  (int)round(P1.y + length * sin(angle * CV_PI / 180.0));
+        
+        P3.x =  (int)round(P1.x - length * cos(angle * CV_PI / 180.0));
+        P3.y =  (int)round(P1.y - length * sin(angle * CV_PI / 180.0));
+        
+        line(res, P3,P2, color, 10, 8 );
+    }
+    
+    return res;
+    
+}
+
+
+//Returns the points of the painting in 'img' in the frame represented by the one contour from 'mask'
+vector<Point> getPaintingPoints(Mat img, Mat mask){
+    
+    vector<Point> points;
+    
+    //Erode the image to get rid of things attached to the frame
+    int erosion_structuring_element_size = 60;
+    Mat err = erode(mask,erosion_structuring_element_size);
+    
+    //Blur the image to smooth the lines of the frame
+    int blur_size = 31;
+    Mat med = medianFilter(err, blur_size);
+    
+    //Get an edge version of the image
+    Mat edges = cannyEdgeDetection(med);
+    
+    //Find lines in the edge image
+    vector<Vec4i> lines;
+    int painting_ratio = max(img.rows,img.cols)*.1;
+    HoughLinesP( edges, lines, 1, CV_PI/180, 0, painting_ratio*1.5, painting_ratio);
+    
+    //Draw extended version of the lines found to create a mask whos largest contour should be the frame (and should have very distinct corners)
+    Mat sudoku = cv::Mat::zeros(img.size(), CV_8UC1); //The mask drawn will look like a nine squares of a sudoku puzzle. (The two vertical and two horizontal lines around the frame extended across the image in the mask)
+    sudoku = extendLinesAcrossImage(sudoku,lines,Scalar(255));
+    
+    //Do connected components on the sudoku version of the image
+    vector<vector<Point>> contours;
+    vector<Vec4i> hierarchy;
+    findContours(invert(sudoku),contours,hierarchy,CV_RETR_TREE, CV_CHAIN_APPROX_NONE);
+    
+    //If the mask does not look like we expect (like a sudoku puzzle) then give up at this point :(
+    if(contours.size()<9){ return points; }
+    
+    //Find the largest contour from the sudoku version of the image
+    int max_contour = 0;
+    for(int j=0;j<contours.size();j++){
+        if(contours[j].size() > contours[max_contour].size()){
+            max_contour = j;
         }
-        
-        //Do connected components on the sudoku image
-        vector<vector<Point>> contours;
-        vector<Vec4i> hierarchy;
-        findContours(invert(sudoku),contours,hierarchy,CV_RETR_TREE, CV_CHAIN_APPROX_NONE);
-        
-        int max_contour = 0;
-        for(int j=0;j<contours.size();j++){
-            if(contours[j].size() > contours[max_contour].size()){
-                max_contour = j;
-            }
+    }
+    
+    return contours[max_contour];
+}
+
+//Returns the corners of the painting in 'img' in the frame represented by the one contour from 'mask'
+vector<Point2f> getPaintingCorners(Mat img, Mat mask){
+    
+    vector<Point2f> corners;
+    
+    //Erode the image to get rid of things attached to the frame
+    int erosion_structuring_element_size = 60;
+    Mat err = erode(mask,erosion_structuring_element_size);
+    
+    //Blur the image to smooth the lines of the frame
+    int blur_size = 31;
+    Mat med = medianFilter(err, blur_size);
+    
+    //Get an edge version of the image
+    Mat edges = cannyEdgeDetection(med);
+    
+    //Find lines in the edge image
+    vector<Vec4i> lines;
+    int painting_ratio = max(img.rows,img.cols)*.1;
+    HoughLinesP( edges, lines, 1, CV_PI/180, 0, painting_ratio*1.5, painting_ratio);
+    
+    //Draw extended version of the lines found to create a mask whos largest contour should be the frame (and should have very distinct corners)
+    Mat sudoku = cv::Mat::zeros(img.size(), CV_8UC1); //The mask drawn will look like a nine squares of a sudoku puzzle. (The two vertical and two horizontal lines around the frame extended across the image in the mask)
+    sudoku = extendLinesAcrossImage(sudoku,lines,Scalar(255));
+    
+    //Do connected components on the sudoku version of the image
+    vector<vector<Point>> contours;
+    vector<Vec4i> hierarchy;
+    findContours(invert(sudoku),contours,hierarchy,CV_RETR_TREE, CV_CHAIN_APPROX_NONE);
+    
+    //If the mask does not look like we expect (like a sudoku puzzle) then give up at this point :(
+    if(contours.size()<9){ return corners; }
+    
+    //Find the largest contour from the sudoku version of the image
+    int max_contour = 0;
+    for(int j=0;j<contours.size();j++){
+        if(contours[j].size() > contours[max_contour].size()){
+            max_contour = j;
         }
+    }
+    
+    //Draw a mask with just the painting contour in it
+    Mat painting_contour = cv::Mat::zeros(img.size(), CV_8UC1);
+    drawContours(painting_contour, contours, max_contour, Scalar(255),CV_FILLED);
+    
+    //Perform Corner detection on the painting contour
+    double corner_quality = .001;
+    int minimum_distance = 20;
+    corners = harrisCornerDetection(painting_contour, 4, corner_quality, minimum_distance);
+    
+    
+    //Create mask image of painting locations for ground truths
+    Mat gts = cv::Mat::zeros(img.size(), CV_8UC1);
+    corners = orderCorners(corners);
+    vector<Point> ps;
+    ps.push_back(corners[0]);
+    ps.push_back(corners[1]);
+    ps.push_back(corners[3]);
+    ps.push_back(corners[2]);
+    
+        fillConvexPoly(gts, ps, Scalar(255));
+    Mat aff_img;
+    img.copyTo(aff_img,gts);
+    
+    vector<Mat> color = {aff_img};
+    display_images("Gallery 0",color);
+    waitKey(0);
+    
+    return corners;
+}
+
+//
+vector<Point2f> translateCorners(vector<Point2f> corners, Point tl){
+    
+    vector<Point2f> translated;
+    
+    for(int i=0;i<corners.size();i++){
+        Point2f newPos(corners[i].x+tl.x,corners[i].y+tl.y);
+        translated.push_back(newPos);
+    }
+    
+    return translated;
+}
+
+//
+vector<Point> translatePoints(vector<Point> points, Point tl){
+    
+    vector<Point> translated;
+    
+    for(int i=0;i<points.size();i++){
+        Point newPos(points[i].x+tl.x,points[i].y+tl.y);
+        translated.push_back(newPos);
+    }
+    
+    return translated;
+}
+
+
+//Returns the index of the painting int 'possible_paintings' that matches the painting found at the 'corners' in 'img' best
+int matchPainting(Mat img,vector<Point2f> corners, vector<Painting> possible_paintings){
+    
+    //Check the features of the found painting against
+    long highest_matches = 0;
+    int best_match_idx = -1;
+    
+    //Check how many Scale Invarient Feature Transform matches the image has with each painting
+    for(int j=0;j<possible_paintings.size();j++){
         
-        //This is a hacky way of giving up on the third (not necessary) painting in the first picture and the third (very difficult) painting in the second picture
-        if(contours.size()<9){ continue; }
+        Mat painting = possible_paintings[j].image;
         
-        //Create a mask image of just the painting in the mask
-        Mat painting_mask = cv::Mat::zeros(sub_image.size(), CV_8UC1);
-        drawContours(painting_mask, contours, max_contour, Scalar(255),CV_FILLED);
+        //Perform an Affine Transformation on the found painting
+        Mat transformed_image = affineTransform(img, corners, painting);
         
-        //Perform Corner detection on the painting mask image
-        double corner_quality = .001;
-        int minimum_distance = 20;
-        vector<Point2f> corners = harrisCornerDetection(painting_mask, 4, corner_quality, minimum_distance);
+        //Get features from the transformed image
+        Ptr<Feature2D> f2d = xfeatures2d::SIFT::create();
+        vector<KeyPoint> trans_keypoints;
+        f2d->detect(transformed_image, trans_keypoints);
+        Mat trans_descriptors;
+        f2d->compute(transformed_image, trans_keypoints, trans_descriptors);
         
-        Mat corne = cv::Mat::zeros(sub_image.size(), CV_8UC1);
-        for( size_t j = 0; j < corners.size(); j++ )
-        {
-            cv::circle( corne, corners[j], 10, cv::Scalar( 255. ), -1 );
+        //Get the features from the painting
+        vector<KeyPoint> painting_keypoints;
+        f2d->detect(painting, painting_keypoints);
+        Mat painting_descriptors;
+        f2d->compute(painting, painting_keypoints, painting_descriptors);
+        
+        //Find the matches between the features in the transformed image and the painting
+        BFMatcher matcher = BFMatcher(NORM_L2, false);
+        vector<DMatch> matches;
+        matcher.match(trans_descriptors,painting_descriptors, matches);
+        matches.erase(remove_if(matches.begin(),matches.end(),too_far),matches.end());
+        
+        //Update the highest_matches
+        if(matches.size()>highest_matches){
+            highest_matches = matches.size();
+            best_match_idx = j;
         }
-        
-        //Check the features of the found painting against
-        int number_of_paintings = 6;
-        string path_to_painting_images = "/Users/GeoffreyNatin/Documents/GithubRepositories/recognizing-paintings/assets/paintings/";
-        vector<Mat> paintings;
-        long max_matches = 0;
-        int max_matches_idx = -1;
-        for(int j=0;j<number_of_paintings;j++){
-            string painting_image_name = "Painting"+to_string(j+1)+".jpg";
-            Mat painting = imread(path_to_painting_images+painting_image_name);
-            paintings.push_back(painting);
-            if(painting.empty()){ cout << "Image "+to_string(j)+" empty" << endl; continue;}
-            
-            
-            //Perform an Affine Transformation on the found painting
-            Mat trans = affineTransform(sub_image, corners, painting);
-            
-            //Crop the original painting to get a template from the centre of the painting
-            int third_of_width = painting.cols/3;
-            int third_of_height = painting.rows/3;
-            cv::Rect cropp(third_of_width+1, third_of_height+1, 2*third_of_width-1, 2*third_of_height-1);
-            Mat temp = painting(cropp);
-            
-            Mat g = grayscale(trans);
-            Mat sg = grayscale(temp);
-            
-            Ptr<Feature2D> f2d = xfeatures2d::SIFT::create();
-            vector<KeyPoint> trans_keypoints;
-            f2d->detect(trans, trans_keypoints);
-            Mat trans_descriptors;
-            f2d->compute(trans, trans_keypoints, trans_descriptors);
-            
-            vector<KeyPoint> temp_keypoints;
-            f2d->detect(temp, temp_keypoints);
-            Mat temp_descriptors;
-            f2d->compute(temp, temp_keypoints, temp_descriptors);
-            
-            BFMatcher matcher = BFMatcher(NORM_L2, false);
-            vector<DMatch> matches;
-            matcher.match(temp_descriptors, trans_descriptors, matches);
-            matches.erase(remove_if(matches.begin(),matches.end(),too_far),matches.end());
-            
-            if(matches.size()>max_matches){
-                max_matches = matches.size();
-                max_matches_idx = j;
-            }
-            
-            
-        }
-        
-        if(max_matches_idx>=0){
-            //vector<Mat> bw = {sub_mask,err,med,edges,sudoku,painting_mask,corne};
-            Mat found = paintings[max_matches_idx];
-            vector<Mat> color = {found};
-            vector<Mat> color1 = {img};
-            //vector<Mat> tempp = {trans,painting};
-            //display_images("bw",bw);
-            display_images("Color",color);
-            display_images("Color1",color1);
-            waitKey(0);
-        }
-        else{
-            int idx = getBestMatchingHistogramIndex(sub_image,corners,paintings);
-            //vector<Mat> bw = {sub_mask,err,med,edges,sudoku,painting_mask,corne};
-            Mat found = paintings[idx];
-            vector<Mat> color = {found};
-            vector<Mat> color1 = {img};
-            //vector<Mat> tempp = {trans,painting};
-            //display_images("bw",bw);
-            display_images("Color",color);
-            display_images("Color1",color1);
-            waitKey(0);
-        }
-        
-        
         
     }
     
-    return painting_locations;
-}
-
-string getPaintingMatch(Mat img, Rect painting_location){
+    //If there is a best match, then return it
+    if(best_match_idx>=0){ return best_match_idx; }
     
-    return "";
+    //Otherwise, return the index of painting with the most similar histogram
+    else{
+        return getBestMatchingHistogramIndex(img,corners,possible_paintings);
+    }
 }
 
-void getHoles(Mat img,string path_to_output_folder,string image_name){
+
+//Returns a RecognisedGallery that represents the gallery from the image
+RecognisedGallery recogniseGallery(Mat img,vector<Painting> possible_paintings){
+    
+    RecognisedGallery gallery;
+    gallery.image = img;
     
     //Perform mean shift segmentation on the image
     int spatial_radius = 7;
@@ -614,17 +672,14 @@ void getHoles(Mat img,string path_to_output_folder,string image_name){
     int maximum_pyramid_level = 1;
     Mat meanS = meanShiftSegmentation(img, spatial_radius, color_radius, maximum_pyramid_level);
     
-    //edgify(meanS);
-    
-    
-    //Get a mask of just the wallc
-    Mat wall_mask = getWallMask(meanS,Scalar::all(2));
+    //Get a mask of just the wall in the gallery
+    Mat wall_mask = getMaskOfLargestSegment(meanS,Scalar::all(2));
     
     //Dilate the wall mask to remove noise
     int structuring_element_size = 18;
     Mat dilated_wall_mask = dilate(wall_mask,structuring_element_size);
     
-    //Invert the wall mask
+    //Invert the wall mask for finding possible painting components
     Mat inverted_wall_mask = invert(dilated_wall_mask);
     
     //Perform connected components on the inverted wall mask to find the non-wall components
@@ -632,72 +687,68 @@ void getHoles(Mat img,string path_to_output_folder,string image_name){
     vector<Vec4i> hierarchy;
     findContours(inverted_wall_mask,contours,hierarchy,CV_RETR_TREE, CV_CHAIN_APPROX_NONE);
     
-    Mat rects = img.clone();
-    //Get the locations of the sub images to check for paintings
-    vector<Rect> sub_images = getBoundingRectsAroundContours(inverted_wall_mask,contours,hierarchy);
+    //Find the contours that are rectangular, big enough to be considered and not spanning the entire image
+    vector<vector<Point>> frame_contours = getPossiblePaintingContours(inverted_wall_mask, contours);
     
-    //Get location of painting in each sub image
-    vector<Rect> painting_locations = getPaintingLocations(img,inverted_wall_mask,sub_images);
-    
-    /*
-    //Check if any potential painting locations contain a painting from our database
-    for(int i=0;i<painting_locations.size();i++){
-        if(getPaintingMatch(img,painting_locations[i])!=""){
-            //Also put the name of the painting on the image here
-            rectangle(img, painting_locations[i].tl(), painting_locations[i].br(), Scalar(255,255,255),3);
+    //For each frame contour, recognise a painting from it.
+    for(int i=0;i<frame_contours.size();i++){
+        RecognisedPainting r;
+        Rect sub_image_location = boundingRect(frame_contours[i]);
+        vector<Point2f> painting_corners = getPaintingCorners(Mat(img,sub_image_location),Mat(inverted_wall_mask,sub_image_location));
+        vector<Point> painting_points = getPaintingPoints(Mat(img,sub_image_location),Mat(inverted_wall_mask,sub_image_location));
+        
+        //If the painting's corners have been found, then match it with a painting from our image bank
+        if(painting_corners.size()==4){
+            int painting_idx = matchPainting(Mat(img,sub_image_location),painting_corners,possible_paintings);
+            r.image = possible_paintings[painting_idx].image;
+            r.name = possible_paintings[painting_idx].name;
+            r.title = possible_paintings[painting_idx].title;
+            r.frameLocation = frame_contours[i];
+            r.painting_points = translatePoints(painting_points,sub_image_location.tl());
+            r.painting_corners = translateCorners(painting_corners,sub_image_location.tl());
+            gallery.recognised_paintings.push_back(r);
         }
+        
     }
-    */
-    /*
-    Mat paints;
-    img.copyTo(paints, inverted_wall_mask);
-    for(int i=0;i<sub_images.size();i++){
-        Point2f rect_points[4]; sub_images[i].points( rect_points );
-        line(paints, rect_points[0], rect_points[1], Scalar(255,0,0), 1, 8 );
-        line(paints, rect_points[1], rect_points[2], Scalar(255,0,0), 1, 8 );
-        line(paints, rect_points[2], rect_points[3], Scalar(255,0,0), 1, 8 );
-        line(paints, rect_points[3], rect_points[0], Scalar(255,0,0), 1, 8 );
-    }
-    */
     
-    
-    
-    /*
-    vector<Mat> color = {img};
-    vector<Mat> bw = {inverted_wall_mask,err,med,edges};
-    display_images("Color",color);
-    display_images("bw",bw);
-    waitKey(0);
-    */
+    return gallery;
 }
 
-Mat createWallMask(Mat img){
+//Finds the DICE Coefficient, of a gallery image. Given the rectangles corresponding to detected text paintings and ground truths
+//Pre-requistite: No detected paintings must overlap and no ground truths must overlap
+double getDiceCoefficient(Mat img, vector<RecognisedPainting> rps, vector<Painting> gts){
     
-    Mat e = img.clone();
+    /*
+     "The DICE cooefficient is 2 times the Area of Overlap
+     (between the ground truth and the regions found by your program)
+     divided by the sum of the Area of the Ground Truth and the Area of the regions found by your program." - Ken
+    */
     
-    //Do mean shift segmentation and get the color of each segment
-    //meanShi
-    Mat meanS = img.clone();
-
-    //Find the color of the biggest segment
+    //Create mask image of painting locations for recognised paintings
+    Mat recognised_mask = cv::Mat::zeros(img.size(), CV_8UC1);
+    Mat ground_truth_mask = cv::Mat::zeros(img.size(), CV_8UC1);
+    for(int i=0;i<rps.size();i++){
+        vector<vector<Point>> contours; contours.push_back(rps[i].painting_points);
+        drawContours(recognised_mask, contours, 0, Scalar(200),CV_FILLED);
+    }
     
-    //Create a mask where all pixels within a certain euclidean distance from the wall color are black
+    //Create mask image of painting locations for ground truths
+    for(int i=0;i<gts.size();i++){
+        vector<Point> ps;
+        for(int j=0;j<gts[i].points.size();j++){
+            ps.push_back(gts[i].points[j]);
+        }
+        fillConvexPoly(ground_truth_mask, ps, Scalar(200));
+    }
     
-    //You know have a binary image (the mask)
+    //Count the non-zero pixels in the masks
+    Mat and_mask;
+    bitwise_and(ground_truth_mask, recognised_mask, and_mask);
+    double overlap = cv::countNonZero(and_mask);
+    double rec_area = countNonZero(recognised_mask);
+    double gt_area = countNonZero(ground_truth_mask);
     
-    //Change all black segments that are below a certain size to white (they are not the wall)
-    
-    //Now you have an image where the black is the things that are not the wall
-    
-    //Do connected components analysis and find the holes that are inside the wall. These are the potential paintings.
-    
-    //Create mask to find average pixel value in original image
-    Mat labels = cv::Mat::zeros(img.size(), CV_8UC1); //This creates a fully black image of the same size as the original image
-    //drawContours(labels, contours, i, Scalar(255),CV_FILLED); //This draws white on the pixels in the contour on the mask.
-    //Scalar average_color = mean(img, labels); // This gets the average color of the pixels in the img where the mask is white.
-    
-    return e;
-    
+    return (2*overlap) / (rec_area + gt_area);
 }
 
 //------------------------------------------------ MAIN PROGRAM --------------------------------------------------------
@@ -715,11 +766,32 @@ int main(int argc, char** argv){
     const int number_of_gallery_images = 4;
     const int number_of_painting_images = 6;
     Mat gallery_images[number_of_gallery_images];
-    Mat painting_images[number_of_painting_images];
-    vector<Gallery> galleries;
+    vector<Painting> paintings;
+    vector<RecognisedGallery> recognised_galleries;
     
     //Read in ground truths
     vector<Gallery> gallery_ground_truths = read_gallery_ground_truths(path_to_gallery_ground_truths_json);
+    
+    //Create the Painting objects to be able to recognise
+    for(int i=0;i<number_of_painting_images;i++){
+        string painting_name = "Painting"+to_string(i+1)+".jpg";
+        Mat painting_image = imread(path_to_painting_images+painting_name);
+        Painting p;
+        p.image = painting_image;
+        p.name = painting_name;
+        paintings.push_back(p);
+    }
+    
+    //Get the title for each painting
+    for(int k=0;k<paintings.size();k++){
+        for(int i=0;i<gallery_ground_truths.size();i++){
+            for(int j=0;j<gallery_ground_truths[i].paintings.size();j++){
+                if(gallery_ground_truths[i].paintings[j].name==paintings[k].name){
+                    paintings[k].title = gallery_ground_truths[i].paintings[j].title;
+                }
+            }
+        }
+    }
     
     //Process each gallery image
     for(int i=0;i<number_of_gallery_images;i++){
@@ -728,17 +800,97 @@ int main(int argc, char** argv){
         gallery_images[i] = imread(path_to_gallery_images+gallery_image_name);
         if(gallery_images[i].empty()){ cout << "Image "+to_string(i)+" empty. Ending program." << endl; return -1; }
         
-        getHoles(gallery_images[i],path_to_gallery_means,gallery_image_name);
-        //Locate paintings
+        RecognisedGallery g = recogniseGallery(gallery_images[i],paintings);
         
-        //Recognise paintings
+        //Draw an image of the paintings having been recognised in the gallery
+        Mat rec = gallery_images[i].clone();
+        for(int j=0;j<g.recognised_paintings.size();j++){
+            
+            int top = 2147483647;
+            int bottom = 0;
+            int left = 2147483647;
+            int right = 0;
+            for(int k=0;k<g.recognised_paintings[j].frameLocation.size();k++){
+                top = min(g.recognised_paintings[j].frameLocation[k].y,top);
+                bottom = max(g.recognised_paintings[j].frameLocation[k].y,bottom);
+                left = min(g.recognised_paintings[j].frameLocation[k].x,left);
+                right = max(g.recognised_paintings[j].frameLocation[k].x,right);
+            }
+            
+            string text = g.recognised_paintings[j].name;
+            int baseline = 0;
+            Size text_size = getTextSize(text, FONT_HERSHEY_SIMPLEX, 1, 2,&baseline);
+            putText(rec, text, Point(left+(right-left)/2-text_size.width/2,top-text_size.height) , FONT_HERSHEY_SIMPLEX, 1, Scalar(0,0,0),2);
+            
+            vector<Point2f> cs = orderCorners(g.recognised_paintings[j].painting_corners);
+            line(rec,cs[0],cs[1],Scalar(0,0,255),5);
+            line(rec,cs[1],cs[3],Scalar(0,0,255),5);
+            line(rec,cs[2],cs[3],Scalar(0,0,255),5);
+            line(rec,cs[2],cs[0],Scalar(0,0,255),5);
+            
+            /*
+            vector<vector<Point>> contours; contours.push_back(g.recognised_paintings[j].painting_points);
+            drawContours(rec, contours, 0, Scalar(0,255,0),CV_FILLED);
+            */
+        }
+        /*
+        vector<Mat> color = {rec};
+        display_images("Gallery 0",color);
+        waitKey(0);
+         */
         
-        //Overlay image names and locations on gallery images ---Shouldn't be in final program
-        
+        g.name = "Gallery"+to_string(i);
+        recognised_galleries.push_back(g);
     }
     
     //Compare recognised paintings to ground truths (calculate different metrics)
     
+    //Count the true positives, false positives, and false negatives
+    int true_positives = 0;
+    int false_negatives = 0;
+    int false_positives = 0;
+    
+    //For every gallery, count how many of its paintings were found correctly and how many were not found
+    for(int i=0;i<gallery_ground_truths.size();i++){
+        
+        //Check if each of its images were found
+        for(int k=0;k<gallery_ground_truths[i].paintings.size();k++){
+            
+            bool present = false;
+            //Check that the painting is present in the recognised gallery
+            for(int l=0;l<recognised_galleries[i].recognised_paintings.size();l++){
+                if(gallery_ground_truths[i].paintings[k].name==recognised_galleries[i].recognised_paintings[l].name){ present = true; }
+            }
+            if(present){ true_positives++; }
+            else{ false_negatives++; }
+            
+        }
+    }
+    
+    //Count how many paintings were recognised that aren't present in the ground truth galleries
+    for(int i=0;i<recognised_galleries.size();i++){
+        
+        //Count the found paintings that are not actually in the ground truth gallery
+        for(int k=0;k<recognised_galleries[i].recognised_paintings.size();k++){
+            
+            bool present = false;
+            //Check that the painting is present in the recognised gallery
+            for(int l=0;l<gallery_ground_truths[i].paintings.size();l++){
+                if(gallery_ground_truths[i].paintings[l].name==recognised_galleries[i].recognised_paintings[k].name){ present = true; break; }
+            }
+            if(!present){ false_positives++; }
+
+        }
+    }
+    
+    //Calculate Dice Coefficients for each gallery image
+    double die[number_of_gallery_images];
+    for(int i=0;i<gallery_ground_truths.size();i++){
+        die[i] = getDiceCoefficient(gallery_images[i],recognised_galleries[i].recognised_paintings,gallery_ground_truths[i].paintings);
+        printf("Gallery: %d, Dice Coefficient: %f.\n",i,die[i]);
+    }
+    
+    printf("True Positives: %d, False Negatives: %d, False Positives: %d.",true_positives,false_negatives,false_positives);
     
     return 0;
 }
