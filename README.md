@@ -115,7 +115,7 @@ The components must be:
 * At least 150*150 pixels in the image.
 * At least 60% of their bounding rectangle in the image.
 
-These criteria restrict paintings that are able to be located and recognised by the program. It is a possibility that some paintings that are different shapes than quadrilaterals, such as circles or triangles may not be categorised as paintings by the program. Also, very small paintings or pictures of paintings that have been taken very far away from the painting might not work either, if they do not fall under these criteria.
+These criteria restrict paintings that are able to be located and recognised by the program. It is a possibility that some paintings that are different shapes than quadrilaterals, such as triangles may not be categorised as paintings by the program. Also, very small paintings or pictures of paintings that have been taken very far away from the painting might not work either, if they do not fall under these criteria.
 
 **Each framed-painting component in the image flood filled to a different colour, to show the reduced component list:**  
 <img src="./assets/report-images/frame-components.png"/>
