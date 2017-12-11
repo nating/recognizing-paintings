@@ -177,7 +177,7 @@ The largest component from the *sudoku-like* mask is taken and drawn on a new ma
 **The isolate painting component:**  
 <img src="./assets/isolated-painting-components/Frame1.png"/>
 
- At this stage, components that were not found to have 4 sides in the image are dropped, because we will the program will not be able to recognise the paintings if the proper edges have not been found. This causes the following painting to not be successfully recognised:
+ At this stage, components that were not found to have 4 sides in the image are dropped, because the program will not be able to recognise the paintings if the proper edges have not been found. This causes the following painting to not be successfully recognised:
 
  **Example of painting locating failure:**  
  <img src="./assets/report-images/example-of-painting-failure.png"/>
