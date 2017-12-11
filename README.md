@@ -297,7 +297,7 @@ The results of the program are good. Only one of the ground truth paintings to b
 
 It is a restriction of the program that paintings and their frames can not overlap with other paintings or their frames in the image of the gallery.
 
-The DICE coefficients are not perfect. Apart from missing an entire painting, the '**locates**' the paintings with an inaccuracy of roughly 15%. This is because the solution is not perfect. It is somewhat clear where the solution veers from perfection, and that is after finding the components that represent the paintings and their frames. In order to **accurately** find the actual location of the painting in the image, the frame should be found in this component and removed. Unfortunately the program does not do this for reasons discussed in the technical details of the solution.
+The DICE coefficients are not perfect. Apart from missing an entire painting, the program '**locates**' the paintings with an inaccuracy of roughly 15%. This is because the solution is not perfect. It is somewhat clear where the solution veers from perfection, and that is after finding the components that represent the paintings and their frames. In order to **accurately** find the actual location of the painting in the image, the frame should be found in this component and removed. Unfortunately the program does not do this for reasons discussed above in the technical details of the solution.
 
 ## 6. Closing Notes for Improvement and Reliability of the Program
 
