@@ -833,11 +833,11 @@ int main(int argc, char** argv){
             drawContours(rec, contours, 0, Scalar(0,255,0),CV_FILLED);
             */
         }
-        /*
+        
         vector<Mat> color = {rec};
         display_images("Gallery 0",color);
         waitKey(0);
-         */
+         
         
         g.name = "Gallery"+to_string(i);
         recognised_galleries.push_back(g);
