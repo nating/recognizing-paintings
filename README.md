@@ -51,7 +51,7 @@ To aid the description of the process of locating and recognising a painting in 
 *(We are not searching for 'Wedding Feast at Cana' in this image. We are detecting that the painting in this image is 'Wedding Feast at Cana'.)*
 
 **Wedding Feast at Cana:**  
-<img src="./assets/paintings/Painting1.jpg"/>
+<img src="./assets/paintings/Painting1.JPG"/>
 
 **Original test image:**  
 <img src="./assets/galleries/Gallery1.JPG"/>
